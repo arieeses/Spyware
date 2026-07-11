@@ -1,0 +1,21 @@
+# 正规客户端 UA 白名单(正则, 大小写不敏感; 版本自动通配)
+# default-deny: 不在此表的一律进嫌疑分析
+^clash
+clash-verge
+clash\.meta
+mihomo
+FlClash
+^v2rayN
+v2rayNG
+Shadowrocket
+^sing-box
+^SF[AIM]        # sing-box 各平台 (SFA/SFI/SFM)
+^Stash
+^Loon
+^Surge
+Surfboard
+Quantumult
+NekoBox
+nekoray
+Hiddify
+Streisand
