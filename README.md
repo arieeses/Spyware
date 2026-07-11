@@ -13,7 +13,20 @@
 已实现信号:机房ASN、工具UA、UA伪造、机器规整拉取、流量背离、注册即侦察 + 自有IP排除层。
 待接入(需节点侧日志 / JA3):拉取后IP静默、扫描式短连、TLS指纹、跨token关联。
 
-## 快速开始:可视化控制后台(推荐)
+## 生产部署
+
+完整步骤见 [部署文档.md](部署文档.md)。速览:
+
+```bash
+# 中央主控(一台 VPS, Python 3.8+)
+git clone https://github.com/arieeses/Spyware.git /opt/spyware && cd /opt/spyware
+pip3 install pymysql
+python3 -m neigui.web --host 127.0.0.1 --port 8787   # 前面套 Nginx HTTPS 反代
+```
+- 首次打开注册管理员 → 加 v2board 面板(只读同步)→ 加探针源、在各面板机一键装探针。
+- 面板机 Nginx 配 `neigui` 日志格式 + `real_ip`;订阅网关按 `/api/decision` 分级下发。
+
+## 本地试用 / 可视化控制后台
 
 ```bash
 python3 -m neigui.web            # 打开 http://127.0.0.1:8787

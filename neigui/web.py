@@ -1268,7 +1268,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/agent/install.sh":
                 tok = q.get("token", [""])[0]
                 host = self.headers.get("Host") or "127.0.0.1:8787"
-                script = AGENT_INSTALL.replace("__MASTER__", f"http://{host}").replace("__TOKEN__", tok)
+                proto = self.headers.get("X-Forwarded-Proto", "http")  # 反代 HTTPS 时用 https
+                script = AGENT_INSTALL.replace("__MASTER__", f"{proto}://{host}").replace("__TOKEN__", tok)
                 self._send(script.encode(), "text/x-shellscript; charset=utf-8")
                 return
             if path == "/agent/agent.py":
