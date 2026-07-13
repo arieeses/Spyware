@@ -10,6 +10,16 @@ from .scoring import RiskResult, score_token
 from .store import Store
 
 
+def _pdt(s):
+    from datetime import datetime
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
 def _disabled_signals(store) -> set:
     import json
     raw = store.get_kv("signals_off", "")
@@ -34,12 +44,15 @@ def analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
     for u in store.all_users():
         if u["token"] in pull_tokens:
             continue
+        cols = u.keys()
         results.append(RiskResult(
             u["token"], 0.0, "正常", excluded=False,
-            email=(u["email"] if "email" in u.keys() else None),
-            user_id=(u["user_id"] if "user_id" in u.keys() else None),
-            panel=(u["panel"] if "panel" in u.keys() else None),
-            traffic_bytes=(u["traffic_bytes"] or 0) if "traffic_bytes" in u.keys() else 0,
+            email=(u["email"] if "email" in cols else None),
+            user_id=(u["user_id"] if "user_id" in cols else None),
+            panel=(u["panel"] if "panel" in cols else None),
+            traffic_bytes=(u["traffic_bytes"] or 0) if "traffic_bytes" in cols else 0,
+            created_at=_pdt(u["created_at"]) if "created_at" in cols else None,
+            expired_at=_pdt(u["expired_at"]) if "expired_at" in cols else None,
         ))
     results.sort(key=lambda r: r.score, reverse=True)
     return results

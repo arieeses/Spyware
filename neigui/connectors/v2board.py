@@ -41,12 +41,20 @@ class V2BoardConnector:
             cursorclass=pymysql.cursors.DictCursor,
         )
 
+    # v2board/Xboard 的 v2_user 列名(可在面板"字段映射"里覆盖)
+    COLS_DEFAULT = {"id": "id", "token": "token", "email": "email", "plan": "plan_id",
+                    "group": "group_id", "created": "created_at", "expired": "expired_at",
+                    "banned": "banned", "u": "u", "d": "d"}
+
     def sync_users(self, store: Store, panel: str = None) -> int:
-        """读 v2_user, upsert 到本地 users 表。流量 = u + d(上下行累计)。panel=归属机场名。"""
+        """读 v2_user, upsert 到本地 users 表。流量 = u + d。panel=归属机场名。"""
         prefix = self.cfg.get("prefix", "v2_")
+        c = {**self.COLS_DEFAULT, **(self.cfg.get("cols") or {})}
         sql = (
-            "SELECT id, email, token, plan_id, group_id, created_at, "
-            "(COALESCE(u,0) + COALESCE(d,0)) AS traffic, banned "
+            f"SELECT {c['id']} AS id, {c['token']} AS token, {c['email']} AS email, "
+            f"{c['plan']} AS plan_id, {c['group']} AS group_id, {c['created']} AS created_at, "
+            f"{c['expired']} AS expired_at, "
+            f"(COALESCE({c['u']},0) + COALESCE({c['d']},0)) AS traffic, {c['banned']} AS banned "
             f"FROM {prefix}user"
         )
         conn = self._connect()
@@ -64,6 +72,7 @@ class V2BoardConnector:
                         plan=str(row.get("plan_id") or ""),
                         group_id=row.get("group_id"),
                         created_at=_epoch_to_iso(row.get("created_at")),
+                        expired_at=_epoch_to_iso(row.get("expired_at")),
                         traffic_bytes=int(row.get("traffic") or 0),
                         banned=int(row.get("banned") or 0),
                         panel=panel,

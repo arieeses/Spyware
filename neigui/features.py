@@ -32,6 +32,7 @@ class TokenFeatures:
     panel: Optional[str] = None
     traffic_bytes: int = 0
     created_at: Optional[datetime] = None
+    expired_at: Optional[datetime] = None
     account_age_days: Optional[float] = None
     reg_to_first_pull_secs: Optional[float] = None
 
@@ -104,6 +105,7 @@ def build_features(token: str, pull_rows: List, user_row,
         f.panel = user_row["panel"] if "panel" in user_row.keys() else None
         f.traffic_bytes = user_row["traffic_bytes"] or 0
         f.created_at = _parse_dt(user_row["created_at"])
+        f.expired_at = _parse_dt(user_row["expired_at"] if "expired_at" in user_row.keys() else None)
         if f.created_at and times:
             f.account_age_days = (f.last_pull - f.created_at).total_seconds() / 86400.0
             f.reg_to_first_pull_secs = (f.first_pull - f.created_at).total_seconds()

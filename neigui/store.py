@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS entities (
 # 增量列(老库升级用, 新库 CREATE 后补齐)
 _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN panel TEXT",
+    "ALTER TABLE users ADD COLUMN expired_at TEXT",
     "ALTER TABLE sources ADD COLUMN auto INTEGER DEFAULT 0",
     "ALTER TABLE sources ADD COLUMN interval INTEGER DEFAULT 300",
 ]
@@ -128,17 +129,18 @@ class Store:
         return n
 
     def upsert_user(self, token, user_id=None, email=None, plan=None, group_id=None,
-                    created_at=None, traffic_bytes=0, banned=0, panel=None, commit=True) -> None:
+                    created_at=None, traffic_bytes=0, banned=0, panel=None,
+                    expired_at=None, commit=True) -> None:
         self.conn.execute(
             """INSERT INTO users(token, user_id, email, plan, group_id,
-                                 created_at, traffic_bytes, banned, panel)
-               VALUES(?,?,?,?,?,?,?,?,?)
+                                 created_at, traffic_bytes, banned, panel, expired_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(token) DO UPDATE SET
                  user_id=excluded.user_id, email=excluded.email, plan=excluded.plan,
                  group_id=excluded.group_id, created_at=excluded.created_at,
                  traffic_bytes=excluded.traffic_bytes, banned=excluded.banned,
-                 panel=COALESCE(excluded.panel, users.panel)""",
-            (token, user_id, email, plan, group_id, created_at, traffic_bytes, banned, panel),
+                 panel=COALESCE(excluded.panel, users.panel), expired_at=excluded.expired_at""",
+            (token, user_id, email, plan, group_id, created_at, traffic_bytes, banned, panel, expired_at),
         )
         if commit:
             self.conn.commit()

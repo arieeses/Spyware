@@ -20,7 +20,7 @@ import threading
 import time
 import urllib.request
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
@@ -37,7 +37,7 @@ LEVEL_COLOR = {"高": "#e5484d", "中": "#ff7d7d", "低": "#f0d264", "正常": "
 LEVEL_FG = {"高": "#fff", "中": "#fff", "低": "#6b5300", "正常": "#fff"}
 LEVEL_TEXT = {"高": "高风险", "中": "中风险", "低": "低风险", "正常": "正常"}
 TAG_COLOR = {
-    "黑名单": "#e5484d", "UA伪造": "#e5484d",
+    "黑名单": "#e5484d", "UA伪造": "#e5484d", "已到期": "#e5484d",
     "机房IP": "#e6a23c", "流量背离": "#e6a23c", "注册侦察": "#e6a23c", "设备超限": "#e6a23c",
     "可疑客户端": "#d4a72c", "自动化": "#d4a72c",
 }
@@ -167,6 +167,14 @@ def _source_detail(src) -> str:
     if src["type"] == "v2board":
         return esc(f"{cfg.get('user')}@{cfg.get('host')}:{cfg.get('port')}/{cfg.get('database')} (前缀 {cfg.get('prefix')})")
     return esc(src["config"])
+
+
+def _mask(s: str) -> str:
+    """打码: 只显示首尾, 中间星号。用于二次编辑时不明文回显库名/IP。"""
+    s = str(s or "")
+    if len(s) <= 4:
+        return "****" if s else ""
+    return s[:2] + "****" + s[-2:]
 
 
 def _source_by_key(store, key: str):
@@ -400,10 +408,13 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
             edit_fn = "editLog"
         else:  # v2board
             detail_cell = _source_detail(s)
+            cm = scfg.get("cols", {})
             edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
-                         f'data-host="{esc(scfg.get("host",""))}" data-port="{esc(scfg.get("port","3306"))}" '
-                         f'data-user="{esc(scfg.get("user",""))}" data-db="{esc(scfg.get("database",""))}" '
-                         f'data-prefix="{esc(scfg.get("prefix","v2_"))}"')
+                         f'data-host="{esc(_mask(scfg.get("host","")))}" data-port="{esc(scfg.get("port","3306"))}" '
+                         f'data-user="{esc(scfg.get("user",""))}" data-db="{esc(_mask(scfg.get("database","")))}" '
+                         f'data-prefix="{esc(scfg.get("prefix","v2_"))}" '
+                         f'data-email="{esc(cm.get("email",""))}" data-created="{esc(cm.get("created",""))}" '
+                         f'data-expired="{esc(cm.get("expired",""))}"')
             edit_fn = "editV2b"
         rows += f"""
         <tr>
@@ -483,7 +494,10 @@ def _log_modals() -> str:
         <input type="hidden" name="mode" id="logMode" value="agent">
         <div class="mfield"><input name="name" placeholder="名称, 如: 机场A" required></div>
         <div class="mfield" id="lf_agenttip"><div class="dim small">探针: 添加后点该行「复制安装命令」在面板服务器执行; 日志路径/间隔装好后在该行编辑。</div></div>
-        <div class="mfield" id="lf_path" style="display:none"><input name="path" id="lf_path_i" placeholder="日志路径, 如 /www/wwwlogs/neigui_sub.log"></div>
+        <div class="mfield" id="lf_path" style="display:none">
+          <label class="dim small">日志路径(可多行/通配, 按日期滚动的日志用 * 匹配)</label>
+          <textarea name="path" id="lf_path_i" rows="3" placeholder="/www/wwwlogs/neigui_sub.log&#10;/www/wwwlogs/*sub.log&#10;/path/2026*su.log"></textarea>
+        </div>
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('addLog')">取消</button><button class="btn">添加</button></div>
       </form>
     </div></div>
@@ -493,22 +507,37 @@ def _log_modals() -> str:
         <input type="hidden" name="id" id="el_id">
         <div class="mfield"><label class="dim small">名称</label><input name="name" id="el_name"></div>
         <div class="mfield"><label class="dim small" id="el_lbl">日志路径</label>
-          <input name="path" id="el_path" placeholder="/www/wwwlogs/neigui_sub.log"></div>
+          <textarea name="path" id="el_path" rows="3" placeholder="每行一个路径或通配, 如 /www/wwwlogs/*sub.log"></textarea>
+          <div class="dim small" style="margin-top:4px">多个路径每行一个; 按日期滚动的日志用通配 *(如 <code>/www/wwwlogs/2026*su.log</code>)。</div></div>
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('editLog')">取消</button><button class="btn">保存</button></div>
       </form>
     </div></div>"""
 
 
+_V2B_COLS = (
+    '<div class="mfield"><label class="dim small">字段映射(选填, 不同版本/魔改列名不同时填, 留空用默认)</label></div>'
+    '<div class="mfield row2"><input name="col_email" {ph_email} placeholder="邮箱列(默认 email)">'
+    '<input name="col_plan" placeholder="套餐列(默认 plan_id)"></div>'
+    '<div class="mfield row2"><input name="col_created" {ph_created} placeholder="注册时间列(默认 created_at)">'
+    '<input name="col_expired" {ph_expired} placeholder="到期时间列(默认 expired_at)"></div>')
+
+
 def _v2b_modals() -> str:
-    return """
+    cols = _V2B_COLS.format(ph_email="", ph_created="", ph_expired="")
+    cols_e = _V2B_COLS  # 编辑时由 JS 填占位
+    return f"""
     <div class="modal-bg" id="addV2b"><div class="modal">
       <h3>添加 v2board 面板</h3>
       <form method="post" action="/sources/add">
         <input type="hidden" name="type" value="v2board">
-        <div class="mfield"><input name="name" placeholder="机场名称, 如: 机场A" required></div>
-        <div class="mfield row2"><input name="host" placeholder="host" value="127.0.0.1" required><input name="port" placeholder="port" value="3306" style="max-width:90px"></div>
-        <div class="mfield row2"><input name="user" placeholder="只读用户" required><input name="password" type="password" placeholder="密码"></div>
-        <div class="mfield row2"><input name="database" placeholder="库名" required><input name="prefix" value="v2_" style="max-width:110px"></div>
+        <div class="mfield"><label class="dim small">机场名称</label><input name="name" placeholder="如: 机场A" required></div>
+        <div class="mfield row2"><div style="flex:1"><label class="dim small">数据库地址(IP/host)</label><input name="host" value="127.0.0.1" required></div>
+          <div style="max-width:100px"><label class="dim small">端口</label><input name="port" value="3306"></div></div>
+        <div class="mfield row2"><div style="flex:1"><label class="dim small">只读用户</label><input name="user" required></div>
+          <div style="flex:1"><label class="dim small">密码</label><input name="password" type="password"></div></div>
+        <div class="mfield row2"><div style="flex:1"><label class="dim small">数据库名</label><input name="database" required></div>
+          <div style="max-width:120px"><label class="dim small">表前缀</label><input name="prefix" value="v2_"></div></div>
+        {cols}
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('addV2b')">取消</button><button class="btn">添加</button></div>
       </form>
     </div></div>
@@ -517,9 +546,16 @@ def _v2b_modals() -> str:
       <form method="post" action="/sources/edit">
         <input type="hidden" name="id" id="ev_id">
         <div class="mfield"><label class="dim small">机场名称</label><input name="name" id="ev_name"></div>
-        <div class="mfield row2"><input name="host" id="ev_host" placeholder="host"><input name="port" id="ev_port" placeholder="port" style="max-width:90px"></div>
-        <div class="mfield row2"><input name="user" id="ev_user" placeholder="用户"><input name="password" id="ev_pass" type="password" placeholder="密码(留空不改)"></div>
-        <div class="mfield row2"><input name="database" id="ev_db" placeholder="库名"><input name="prefix" id="ev_prefix" placeholder="前缀" style="max-width:110px"></div>
+        <div class="mfield row2"><div style="flex:1"><label class="dim small">数据库地址(留空不改)</label><input name="host" id="ev_host"></div>
+          <div style="max-width:100px"><label class="dim small">端口</label><input name="port" id="ev_port"></div></div>
+        <div class="mfield row2"><div style="flex:1"><label class="dim small">只读用户</label><input name="user" id="ev_user"></div>
+          <div style="flex:1"><label class="dim small">密码(留空不改)</label><input name="password" id="ev_pass" type="password"></div></div>
+        <div class="mfield row2"><div style="flex:1"><label class="dim small">数据库名(留空不改)</label><input name="database" id="ev_db"></div>
+          <div style="max-width:120px"><label class="dim small">表前缀</label><input name="prefix" id="ev_prefix"></div></div>
+        <div class="mfield row2"><input name="col_email" id="ev_col_email" placeholder="邮箱列(默认 email)">
+          <input name="col_plan" id="ev_col_plan" placeholder="套餐列(默认 plan_id)"></div>
+        <div class="mfield row2"><input name="col_created" id="ev_col_created" placeholder="注册时间列(默认 created_at)">
+          <input name="col_expired" id="ev_col_expired" placeholder="到期时间列(默认 expired_at)"></div>
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('editV2b')">取消</button><button class="btn">保存</button></div>
       </form>
     </div></div>"""
@@ -859,7 +895,8 @@ def render_entities(store: Store, kind: str) -> str:
     </div>"""
 
 
-def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str = "") -> str:
+def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str = "",
+                    size: str = "30", page: str = "1") -> str:
     results = analyze(store)
     counts = {"高": 0, "中": 0, "低": 0, "正常": 0}
     excluded = 0
@@ -896,33 +933,44 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         ptabs += f'<a class="tab {active}" href="/risk?level={lf}&panel={quote(pn)}">{esc(pn)}</a>'
     panel_bar = f'<div class="tabs"><span class="dim small" style="align-self:center;margin-right:4px">机场:</span>{ptabs}</div>' if panels else ""
 
-    rows = ""
-    shown = 0
-    matched = 0
-    LIMIT = 300
+    # 过滤(等级/机场/搜索)
+    slc = search.lower()
+    filtered = []
     for r in results:
         if flt in ("高", "中", "低", "正常") and r.level != flt:
             continue
         if panel_flt and panel_flt != "all" and (r.panel or "") != panel_flt:
             continue
-        if search:
-            hit = (search.lower() in r.token.lower()
-                   or search.lower() in (r.email or "").lower()
-                   or r.token in ip_tokens)
-            if not hit:
-                continue
-        matched += 1
-        if shown >= LIMIT:
+        if search and not (slc in r.token.lower() or slc in (r.email or "").lower() or r.token in ip_tokens):
             continue
-        shown += 1
+        filtered.append(r)
+
+    # 分页
+    total = len(filtered)
+    all_mode = (size == "all")
+    psize = total if all_mode else max(1, int(size) if str(size).isdigit() else 30)
+    pages = max(1, (total + psize - 1) // psize) if not all_mode else 1
+    pg = min(max(1, int(page) if str(page).isdigit() else 1), pages)
+    page_rows = filtered if all_mode else filtered[(pg - 1) * psize: pg * psize]
+
+    now = datetime.now(timezone.utc)
+    rows = ""
+    for r in page_rows:
         color = LEVEL_COLOR.get(r.level, "#8b8f98")
         uid = esc(r.user_id if r.user_id is not None else "-")
+        expired = r.expired_at is not None and r.expired_at < now
+        tags = list(r.tags)
+        if expired:
+            tags = ["已到期"] + tags
         tags_html = "".join(
             f'<span class="rtag" style="background:{TAG_COLOR.get(t, "#8b8f98")}22;'
-            f'color:{TAG_COLOR.get(t, "#8b8f98")}">{esc(t)}</span>' for t in r.tags)
+            f'color:{TAG_COLOR.get(t, "#8b8f98")}">{esc(t)}</span>' for t in tags)
         if r.excluded:
             tags_html = '<span class="rtag" style="background:#8b8f8822;color:#8b8f98">自有基础设施</span>'
         detail = " | ".join(f"{s.name}(+{s.points})" for s in r.signals) or "无命中信号"
+        reg = r.created_at.strftime("%Y-%m-%d") if r.created_at else "-"
+        exp = ("永久" if r.expired_at is None and r.created_at else
+               (r.expired_at.strftime("%Y-%m-%d") if r.expired_at else "-"))
         rows += f"""
         <tr title="{esc(detail)}">
           <td class="mono small">{uid}</td>
@@ -936,22 +984,38 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
             <span class="scoreval">{r.score}</span></td>
           <td><span class="badge" style="background:{color};color:{LEVEL_FG.get(r.level, '#fff')}">{LEVEL_TEXT.get(r.level, r.level)}</span></td>
           <td class="rtags">{tags_html or '<span class="dim">—</span>'}</td>
-          <td class="small dim">待接入</td>
+          <td class="small dim">{reg}</td>
+          <td class="small {'' if not expired else 'dim'}" style="{'color:#e5484d' if expired else ''}">{exp}</td>
           <td class="small dim">{_humanize(r.last_pull)}</td>
         </tr>"""
     if not rows:
-        rows = '<tr><td colspan="11" class="dim" style="padding:20px">暂无用户</td></tr>'
+        rows = '<tr><td colspan="12" class="dim" style="padding:20px">暂无用户</td></tr>'
 
-    trunc = (f'<span class="dim small">匹配 {matched} 条, 仅显示前 {LIMIT} 条(用搜索缩小范围)</span>'
-             if matched > LIMIT else f'<span class="dim small">{matched} 条</span>')
+    # 搜索框
     searchbox = (
         f'<form method="get" action="/risk" style="margin-left:auto;display:flex;gap:6px">'
         f'<input type="hidden" name="level" value="{esc(flt or "all")}">'
         f'<input type="hidden" name="panel" value="{esc(panel_flt or "all")}">'
+        f'<input type="hidden" name="size" value="{esc(size)}">'
         f'<input name="q" value="{esc(search)}" placeholder="搜索 token / 邮箱 / IP" style="width:220px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
         f'<button class="btn sm">搜索</button>'
         + (f'<a class="btn sm ghost" href="/risk?level={quote(flt or "all")}&panel={pf}">清除</a>' if search else '')
         + '</form>')
+
+    # 分页控件
+    def purl(sz, p):
+        return f"/risk?level={lf}&panel={pf}&q={quote(search)}&size={quote(str(sz))}&page={p}"
+    sizesel = "".join(
+        f'<a class="tab {"active" if str(size)==str(sz) else ""}" href="{purl(sz, 1)}">{"全部" if sz=="all" else sz}</a>'
+        for sz in ["15", "30", "60", "100", "200", "all"])
+    prevnext = ""
+    if not all_mode and pages > 1:
+        prev = f'<a class="btn sm ghost" href="{purl(size, pg-1)}">上一页</a>' if pg > 1 else ''
+        nxt = f'<a class="btn sm ghost" href="{purl(size, pg+1)}">下一页</a>' if pg < pages else ''
+        prevnext = f'<span class="dim small">第 {pg}/{pages} 页 · 共 {total} 条</span> {prev} {nxt}'
+    else:
+        prevnext = f'<span class="dim small">共 {total} 条</span>'
+
     return f"""
     <div class="card">
       <div class="card-title">用户风险管理
@@ -960,18 +1024,19 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
       <div class="chips">{chips}</div>
       <div class="tabs">{tabs}</div>
       {panel_bar}
-      <div style="margin:2px 2px 8px">{trunc}</div>
+      <div class="tabs" style="align-items:center"><span class="dim small" style="margin-right:4px">每页:</span>{sizesel}
+        <span style="margin-left:auto;display:flex;gap:8px;align-items:center">{prevnext}</span></div>
       <div class="tablewrap">
       <table class="grid sortable" id="risk">
         <thead><tr>
           <th data-t="num">用户ID</th><th>邮箱</th><th>机场</th><th>Token</th>
           <th data-t="num">IP数</th><th data-t="num">拉取</th>
           <th data-t="num">风险分</th><th>风险等级</th>
-          <th>风险标签</th><th>访问画像</th><th>最后活跃</th>
+          <th>风险标签</th><th>注册时间</th><th>到期时间</th><th>最后活跃</th>
         </tr></thead>
         <tbody>{rows}</tbody>
       </table></div>
-      <div class="dim small" style="margin-top:8px">机场归属来自 v2board 面板同步; 「访问画像」需接入节点侧流量日志后点亮。</div>
+      <div class="dim small" style="margin-top:8px">机场归属来自 v2board 同步; 红色到期时间=已到期; 「已到期」标签自动标注。</div>
     </div>"""
 
 
@@ -1211,7 +1276,7 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .modal h3 {{ margin:0 0 6px; font-size:16px; }}
   .modal .mfield {{ margin-top:12px; }}
   .modal .mfield label {{ display:block; margin-bottom:4px; }}
-  .modal input {{ width:100%; padding:8px 10px; border:1px solid #d5dae1; border-radius:7px; font-size:13px; }}
+  .modal input, .modal textarea {{ width:100%; padding:8px 10px; border:1px solid #d5dae1; border-radius:7px; font-size:13px; font-family:inherit; }}
   .modal .row2 {{ display:flex; gap:8px; }}
   .modal-actions {{ display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }}
   .switch {{ position:relative; display:inline-block; width:38px; height:20px; vertical-align:middle; }}
@@ -1298,10 +1363,18 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     openM('editLog');
   }}
   function editV2b(b){{
-    ['id','name','host','port','user','db','prefix'].forEach(function(k){{
-      var el=document.getElementById('ev_'+k); if(el) el.value=b.dataset[k]||'';
-    }});
+    document.getElementById('ev_id').value=b.dataset.id;
+    document.getElementById('ev_name').value=b.dataset.name||'';
+    document.getElementById('ev_port').value=b.dataset.port||'';
+    document.getElementById('ev_user').value=b.dataset.user||'';
+    document.getElementById('ev_prefix').value=b.dataset.prefix||'';
+    var h=document.getElementById('ev_host'); h.value=''; h.placeholder=(b.dataset.host||'')+' (留空不改)';
+    var d=document.getElementById('ev_db'); d.value=''; d.placeholder=(b.dataset.db||'')+' (留空不改)';
     document.getElementById('ev_pass').value='';
+    document.getElementById('ev_col_email').value=b.dataset.email||'';
+    document.getElementById('ev_col_created').value=b.dataset.created||'';
+    document.getElementById('ev_col_expired').value=b.dataset.expired||'';
+    document.getElementById('ev_col_plan').value='';
     openM('editV2b');
   }}
   function cpAgent(t){{
@@ -1492,7 +1565,8 @@ class Handler(BaseHTTPRequestHandler):
                 content = render_source_page(store, "logfile", q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "risk":
                 content = render_risklist(store, q.get("level", ["all"])[0],
-                                          q.get("panel", ["all"])[0], q.get("q", [""])[0])
+                                          q.get("panel", ["all"])[0], q.get("q", [""])[0],
+                                          q.get("size", ["30"])[0], q.get("page", ["1"])[0])
             elif active == "rules":
                 content = render_rules(store)
             elif active == "whitelist":
@@ -1623,6 +1697,12 @@ class Handler(BaseHTTPRequestHandler):
                     cfg = {"host": form.get("host", "127.0.0.1"), "port": form.get("port", "3306"),
                            "user": form.get("user", ""), "password": form.get("password", ""),
                            "database": form.get("database", ""), "prefix": form.get("prefix", "v2_")}
+                    cols = {k: form.get(f, "").strip() for k, f in
+                            (("email", "col_email"), ("plan", "col_plan"),
+                             ("created", "col_created"), ("expired", "col_expired"))
+                            if form.get(f, "").strip()}
+                    if cols:
+                        cfg["cols"] = cols
                 store.add_source(t, name, json.dumps(cfg))
                 self._back(); return
             if path == "/sources/edit":
@@ -1631,13 +1711,21 @@ class Handler(BaseHTTPRequestHandler):
                     cfg = json.loads(src["config"] or "{}")
                     name = form.get("name", "").strip() or src["name"]
                     if src["type"] == "v2board":
-                        cfg["host"] = form.get("host", "127.0.0.1")
-                        cfg["port"] = form.get("port", "3306")
-                        cfg["user"] = form.get("user", "")
-                        cfg["database"] = form.get("database", "")
-                        cfg["prefix"] = form.get("prefix", "v2_")
+                        # 留空则保留原值(库名/IP 二次编辑打码, 不改就留空)
+                        for field in ("host", "port", "user", "database", "prefix"):
+                            v = form.get(field, "").strip()
+                            if v:
+                                cfg[field] = v
                         if form.get("password", ""):
                             cfg["password"] = form["password"]
+                        cols = {k: form.get(f, "").strip() for k, f in
+                                (("email", "col_email"), ("plan", "col_plan"),
+                                 ("created", "col_created"), ("expired", "col_expired"))
+                                if form.get(f, "").strip()}
+                        if cols:
+                            cfg["cols"] = cols
+                        else:
+                            cfg.pop("cols", None)
                     else:
                         p = form.get("path", "").strip()
                         if cfg.get("mode") == "agent":

@@ -20,8 +20,8 @@ LEVEL_ICON = {"高": "🔴", "中": "🟠", "低": "🟡", "正常": "⚪"}
 def cmd_ingest(args) -> None:
     """增量导入: 记录读取 offset, 重跑/定时只读新增行(cron 安全)。--reset 强制重读。"""
     store = Store()
-    n, start, end = ingest_logfile(store, args.log, reset=args.reset)
-    print(f"已导入 {n} 条新记录(从 offset {start} → {end}) → {CONFIG.db_path}")
+    n, nf, _ = ingest_logfile(store, args.log, reset=args.reset)
+    print(f"已导入 {n} 条新记录(匹配 {nf} 个文件) → {CONFIG.db_path}")
 
 
 def cmd_sync_v2board(args) -> None:

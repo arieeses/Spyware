@@ -33,6 +33,8 @@ class RiskResult:
     pull_count: int = 0
     last_pull: Optional[datetime] = None
     traffic_bytes: int = 0
+    created_at: Optional[datetime] = None
+    expired_at: Optional[datetime] = None
 
     @property
     def tags(self) -> List[str]:
@@ -51,7 +53,8 @@ def _level(score: float, th) -> str:
 
 def _display(f: TokenFeatures) -> dict:
     return dict(email=f.email, user_id=f.user_id, panel=f.panel, distinct_ips=f.distinct_ips,
-                pull_count=f.pull_count, last_pull=f.last_pull, traffic_bytes=f.traffic_bytes)
+                pull_count=f.pull_count, last_pull=f.last_pull, traffic_bytes=f.traffic_bytes,
+                created_at=f.created_at, expired_at=f.expired_at)
 
 
 def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskResult:
