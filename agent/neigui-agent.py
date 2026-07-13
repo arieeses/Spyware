@@ -106,7 +106,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--master", required=True)
     ap.add_argument("--token", required=True)
-    ap.add_argument("--log", required=True)
+    ap.add_argument("--log", default="/www/wwwlogs/neigui_sub.log")  # 兜底; 中央可下发覆盖
     ap.add_argument("--state", default="/opt/neigui-agent/state.json")
     a = ap.parse_args()
 
@@ -118,17 +118,21 @@ def main():
         pass
 
     interval = 5
+    log_path = a.log
     while True:
         cfg = http_get(f"{a.master}/api/agent/config?token={a.token}")
-        if cfg and cfg.get("interval"):
-            try:
-                interval = int(cfg["interval"])
-            except (ValueError, TypeError):
-                pass
+        if cfg:
+            if cfg.get("interval"):
+                try:
+                    interval = int(cfg["interval"])
+                except (ValueError, TypeError):
+                    pass
+            if cfg.get("log_path"):          # 中央下发的日志路径优先
+                log_path = cfg["log_path"]
         lines, newstate = [], state
         try:
-            if os.path.exists(a.log):
-                lines, newstate = read_new(a.log, state)
+            if os.path.exists(log_path):
+                lines, newstate = read_new(log_path, state)
         except Exception:
             pass
         ok = http_post(f"{a.master}/api/agent/report?token={a.token}",

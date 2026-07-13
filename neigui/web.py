@@ -75,7 +75,7 @@ NAV = [
     ("风险管理", [
         ("risk", "风险名单", "/risk"),
         ("rules", "风险规则", "/rules"),
-        ("whitelist", "白名单/黑名单", "/whitelist"),
+        ("whitelist", "黑白名单", "/whitelist"),
         ("domains", "入口域名", "/domains"),
     ]),
     ("运行", [
@@ -384,10 +384,15 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
             status = '<span class="on">● 在线</span>' if online else '<span class="off">○ 离线</span>'
             metstr = (f'CPU {met.get("cpu","-")}% 内存 {met.get("mem","-")}% 磁盘 {met.get("disk","-")}%'
                       if met else "尚无数据")
+            lp = scfg.get("log_path", "")
             detail_cell = (
                 f'<div>探针 · {status} <span class="dim small">{metstr}</span></div>'
+                f'<form method="post" action="/agent/logpath" class="inlineform" style="margin:5px 0 0">'
+                f'<input type="hidden" name="id" value="{s["id"]}">'
+                f'<input name="log_path" value="{esc(lp)}" placeholder="日志路径(留空用默认 /www/wwwlogs/neigui_sub.log)" style="width:280px">'
+                f'<button class="btn sm ghost">下发路径</button></form>'
                 f'<button class="btn sm ghost" type="button" style="margin-top:5px" '
-                f'onclick="cpAgent(\'{esc(tok)}\')">复制一键安装命令</button>')
+                f'onclick="cpAgent(\'{esc(tok)}\')">复制安装命令</button>')
         else:
             detail_cell = _source_detail(s)
         rows += f"""
@@ -821,7 +826,7 @@ def render_entities(store: Store, kind: str) -> str:
     </div>"""
 
 
-def render_risklist(store: Store, flt: str, panel_flt: str = "all") -> str:
+def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str = "") -> str:
     results = analyze(store)
     counts = {"高": 0, "中": 0, "低": 0, "正常": 0}
     excluded = 0
@@ -831,6 +836,10 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all") -> str:
         excluded += 1 if r.excluded else 0
         if r.panel:
             panels.add(r.panel)
+
+    # 搜索: token / 邮箱 / IP
+    search = (search or "").strip()
+    ip_tokens = store.tokens_by_ip(search) if search else set()
 
     def chip(label, val, color):
         return f'<span class="chip"><b style="color:{color}">{val}</b> {label}</span>'
@@ -855,11 +864,24 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all") -> str:
     panel_bar = f'<div class="tabs"><span class="dim small" style="align-self:center;margin-right:4px">机场:</span>{ptabs}</div>' if panels else ""
 
     rows = ""
+    shown = 0
+    matched = 0
+    LIMIT = 300
     for r in results:
         if flt in ("高", "中", "低", "正常") and r.level != flt:
             continue
         if panel_flt and panel_flt != "all" and (r.panel or "") != panel_flt:
             continue
+        if search:
+            hit = (search.lower() in r.token.lower()
+                   or search.lower() in (r.email or "").lower()
+                   or r.token in ip_tokens)
+            if not hit:
+                continue
+        matched += 1
+        if shown >= LIMIT:
+            continue
+        shown += 1
         color = LEVEL_COLOR.get(r.level, "#8b8f98")
         uid = esc(r.user_id if r.user_id is not None else "-")
         tags_html = "".join(
@@ -887,13 +909,25 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all") -> str:
     if not rows:
         rows = '<tr><td colspan="11" class="dim" style="padding:20px">暂无用户</td></tr>'
 
+    trunc = (f'<span class="dim small">匹配 {matched} 条, 仅显示前 {LIMIT} 条(用搜索缩小范围)</span>'
+             if matched > LIMIT else f'<span class="dim small">{matched} 条</span>')
+    searchbox = (
+        f'<form method="get" action="/risk" style="margin-left:auto;display:flex;gap:6px">'
+        f'<input type="hidden" name="level" value="{esc(flt or "all")}">'
+        f'<input type="hidden" name="panel" value="{esc(panel_flt or "all")}">'
+        f'<input name="q" value="{esc(search)}" placeholder="搜索 token / 邮箱 / IP" style="width:220px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
+        f'<button class="btn sm">搜索</button>'
+        + (f'<a class="btn sm ghost" href="/risk?level={quote(flt or "all")}&panel={pf}">清除</a>' if search else '')
+        + '</form>')
     return f"""
     <div class="card">
       <div class="card-title">用户风险管理
-        <span class="dim small" style="font-weight:400;margin-left:8px">点表头排序</span></div>
+        <span class="dim small" style="font-weight:400;margin-left:8px">点表头排序</span>
+        {searchbox}</div>
       <div class="chips">{chips}</div>
       <div class="tabs">{tabs}</div>
       {panel_bar}
+      <div style="margin:2px 2px 8px">{trunc}</div>
       <div class="tablewrap">
       <table class="grid sortable" id="risk">
         <thead><tr>
@@ -1207,7 +1241,7 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   function cpAgent(t){{
     var c='curl -fsSL "'+location.origin+'/agent/install.sh?token='+t+'" | bash';
     if(navigator.clipboard) navigator.clipboard.writeText(c);
-    alert('一键安装命令已复制, 在面板服务器上执行:\\n\\n'+c+'\\n\\n(默认日志路径 /www/wwwlogs/neigui_sub.log, 需改则在命令前加 LOG=/你的路径 )');
+    alert('一键安装命令已复制, 在面板服务器上执行:\\n\\n'+c+'\\n\\n装好后探针会自动连上; 日志路径和上报间隔都在本页该探针行里设置, 无需改命令。');
   }}
 (function(){{
   var t=document.getElementById('risk'); if(!t) return;
@@ -1238,7 +1272,7 @@ VIEWS = {
     "/panels/log": ("log", "日志接入"),
     "/risk": ("risk", "风险名单"),
     "/rules": ("rules", "风险规则"),
-    "/whitelist": ("whitelist", "白名单/黑名单"),
+    "/whitelist": ("whitelist", "黑白名单"),
     "/domains": ("domains", "入口域名"),
     "/run": ("run", "运行控制"),
     "/runlog": ("runlog", "运行日志"),
@@ -1314,7 +1348,8 @@ class Handler(BaseHTTPRequestHandler):
                 key = q.get("token", [""])[0]
                 src = _source_by_key(store, key)
                 interval = (src["interval"] if src and "interval" in src.keys() else 60) or 60
-                self._send(json.dumps({"interval": interval, "commands": []}).encode(),
+                lp = json.loads(src["config"] or "{}").get("log_path", "") if src else ""
+                self._send(json.dumps({"interval": interval, "log_path": lp, "commands": []}).encode(),
                            "application/json; charset=utf-8")
                 return
 
@@ -1390,7 +1425,8 @@ class Handler(BaseHTTPRequestHandler):
             elif active == "log":
                 content = render_source_page(store, "logfile", q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "risk":
-                content = render_risklist(store, q.get("level", ["all"])[0], q.get("panel", ["all"])[0])
+                content = render_risklist(store, q.get("level", ["all"])[0],
+                                          q.get("panel", ["all"])[0], q.get("q", [""])[0])
             elif active == "rules":
                 content = render_rules(store)
             elif active == "whitelist":
@@ -1552,6 +1588,13 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     off.add(key)
                 store.set_kv("signals_off", json.dumps(sorted(off)))
+                self._back(); return
+            if path == "/agent/logpath":
+                src = store.get_source(int(form["id"]))
+                if src:
+                    c = json.loads(src["config"] or "{}")
+                    c["log_path"] = form.get("log_path", "").strip()
+                    store.update_source_config(src["id"], json.dumps(c))
                 self._back(); return
             if path == "/sources/auto":
                 store.set_source_auto(int(form["id"]), 1 if form.get("auto") else 0,

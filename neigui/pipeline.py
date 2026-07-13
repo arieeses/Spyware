@@ -25,11 +25,22 @@ def analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
     bl = Blacklist()
     off = _disabled_signals(store)
     results: List[RiskResult] = []
-    for token in store.tokens():
-        pulls = store.pulls_for(token)
-        user = store.user(token)
-        feats = build_features(token, pulls, user, ipc, uac, bl)
+    pull_tokens = set(store.tokens())
+    # 有拉取行为的用户: 正常评分
+    for token in pull_tokens:
+        feats = build_features(token, store.pulls_for(token), store.user(token), ipc, uac, bl)
         results.append(score_token(feats, cfg, off))
+    # 同步来但暂无拉取日志的用户: 显示为"正常/待评估"(拉取0), 便于查看/搜索
+    for u in store.all_users():
+        if u["token"] in pull_tokens:
+            continue
+        results.append(RiskResult(
+            u["token"], 0.0, "正常", excluded=False,
+            email=(u["email"] if "email" in u.keys() else None),
+            user_id=(u["user_id"] if "user_id" in u.keys() else None),
+            panel=(u["panel"] if "panel" in u.keys() else None),
+            traffic_bytes=(u["traffic_bytes"] or 0) if "traffic_bytes" in u.keys() else 0,
+        ))
     results.sort(key=lambda r: r.score, reverse=True)
     return results
 

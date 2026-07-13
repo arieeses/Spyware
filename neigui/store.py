@@ -158,6 +158,18 @@ class Store:
     def user(self, token: str):
         return self.conn.execute("SELECT * FROM users WHERE token=?", (token,)).fetchone()
 
+    def all_users(self):
+        return self.conn.execute("SELECT * FROM users").fetchall()
+
+    def tokens_by_ip(self, ip_like: str):
+        rows = self.conn.execute(
+            "SELECT DISTINCT token FROM pulls WHERE ip LIKE ?", (f"%{ip_like}%",)).fetchall()
+        return {r["token"] for r in rows}
+
+    def update_source_config(self, sid: int, config: str) -> None:
+        self.conn.execute("UPDATE sources SET config=? WHERE id=?", (config, sid))
+        self.conn.commit()
+
     def get_ingest_state(self, path: str):
         return self.conn.execute(
             "SELECT offset, inode FROM ingest_state WHERE path=?", (path,)
