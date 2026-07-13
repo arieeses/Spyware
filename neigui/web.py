@@ -102,21 +102,24 @@ set -e
 MASTER="__MASTER__"
 TOKEN="__TOKEN__"
 LOG="${LOG:-/www/wwwlogs/neigui_sub.log}"
-mkdir -p /opt/neigui-agent
-curl -fsS "$MASTER/agent/agent.py" -o /opt/neigui-agent/agent.py
-cat >/etc/systemd/system/neigui-agent.service <<UNIT
+# 兼容旧版: 若装过 neigui-agent 先移除
+systemctl disable --now neigui-agent 2>/dev/null || true
+rm -f /etc/systemd/system/neigui-agent.service 2>/dev/null || true
+mkdir -p /opt/spyware-agent
+curl -fsS "$MASTER/agent/agent.py" -o /opt/spyware-agent/agent.py
+cat >/etc/systemd/system/spyware-agent.service <<UNIT
 [Unit]
-Description=neigui agent
+Description=Spyware Agent (探针)
 After=network.target
 [Service]
-ExecStart=/usr/bin/python3 /opt/neigui-agent/agent.py --master $MASTER --token $TOKEN --log $LOG
+ExecStart=/usr/bin/python3 /opt/spyware-agent/agent.py --master $MASTER --token $TOKEN --log $LOG --state /opt/spyware-agent/state.json
 Restart=always
 [Install]
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now neigui-agent
-echo "neigui-agent 已安装并启动 (log: $LOG)"
+systemctl enable --now spyware-agent
+echo "spyware-agent 已安装并启动 (log: $LOG)"
 """
 
 # 分级入口域名: (key, 名称, 说明)
@@ -1611,7 +1614,7 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     alert('一键安装命令已复制, 在面板服务器上执行:\\n\\n'+c+'\\n\\n装好后探针会自动连上; 日志路径和上报间隔都在本页该探针行里设置, 无需改命令。');
   }}
   function cpUninstall(){{
-    var c="systemctl disable --now neigui-agent 2>/dev/null; rm -f /etc/systemd/system/neigui-agent.service; systemctl daemon-reload; rm -rf /opt/neigui-agent; echo neigui-agent 已卸载";
+    var c="systemctl disable --now spyware-agent 2>/dev/null; rm -f /etc/systemd/system/spyware-agent.service; systemctl daemon-reload; rm -rf /opt/spyware-agent; echo spyware-agent 已卸载";
     if(navigator.clipboard) navigator.clipboard.writeText(c);
     alert('卸载命令已复制, 在探针所在的面板服务器上执行:\\n\\n'+c+'\\n\\n然后在本页点该探针的「删除」移除数据源。');
   }}

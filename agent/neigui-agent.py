@@ -107,7 +107,7 @@ def main():
     ap.add_argument("--master", required=True)
     ap.add_argument("--token", required=True)
     ap.add_argument("--log", default="/www/wwwlogs/neigui_sub.log")  # 兜底; 中央可下发覆盖
-    ap.add_argument("--state", default="/opt/neigui-agent/state.json")
+    ap.add_argument("--state", default="/opt/spyware-agent/state.json")
     a = ap.parse_args()
 
     state = {}
