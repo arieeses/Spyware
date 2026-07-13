@@ -262,22 +262,33 @@ class Scheduler(threading.Thread):
             try:
                 store = Store()
                 master = store.get_kv("auto_enabled", "0") == "1"
-                if master:
-                    now = time.time()
-                    ran = []
-                    for src in store.list_sources():
-                        auto = src["auto"] if "auto" in src.keys() else 0
-                        if not src["enabled"] or not auto:
-                            continue
-                        iv = (src["interval"] if "interval" in src.keys() else 300) or 300
-                        last = float(store.get_kv(f"src_last_{src['id']}", "0") or 0)
-                        if now - last >= iv:
-                            ok, msg = run_source(store, src)
-                            store.set_kv(f"src_last_{src['id']}", str(now))
-                            ran.append(f"{'✓' if ok else '✗'} [{src['name']}] {msg}")
-                    if ran:
-                        store.set_kv("last_run_summary", " · ".join(ran))
-                        store.set_kv("last_run_ts", datetime.now().isoformat(timespec="seconds"))
+                now = time.time()
+                ran = []
+                for src in store.list_sources():
+                    if not src["enabled"]:
+                        continue
+                    try:
+                        mode = json.loads(src["config"] or "{}").get("sync_mode", "manual")
+                    except (ValueError, TypeError):
+                        mode = "manual"
+                    # auto: 独立按间隔跑; follow: 仅当全局总开关开启才跑; manual: 不自动
+                    if mode == "auto":
+                        active = True
+                    elif mode == "follow":
+                        active = master
+                    else:
+                        continue
+                    if not active:
+                        continue
+                    iv = (src["interval"] if "interval" in src.keys() else 300) or 300
+                    last = float(store.get_kv(f"src_last_{src['id']}", "0") or 0)
+                    if now - last >= iv:
+                        ok, msg = run_source(store, src)
+                        store.set_kv(f"src_last_{src['id']}", str(now))
+                        ran.append(f"{'✓' if ok else '✗'} [{src['name']}] {msg}")
+                if ran:
+                    store.set_kv("last_run_summary", " · ".join(ran))
+                    store.set_kv("last_run_ts", datetime.now().isoformat(timespec="seconds"))
                 store.close()
             except Exception:  # noqa: BLE001
                 pass
@@ -376,35 +387,44 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
         if s["type"] != kind:
             continue
         on = s["enabled"]
-        auto = s["auto"] if "auto" in s.keys() else 0
         iv = (s["interval"] if "interval" in s.keys() else 300) or 300
-        sync_mode = (f'<span class="on">自动</span> · 每 {iv}s' if auto else '<span class="off">手动</span>')
         scfg = json.loads(s["config"] or "{}")
+        smode = scfg.get("sync_mode", "manual")
+        sync_txt = {"manual": '<span class="off">手动</span>',
+                    "auto": f'<span class="on">自动</span> · 每 {iv}s',
+                    "follow": f'<span style="color:#5b8def">跟随全局</span> · 每 {iv}s'}.get(smode, "手动")
         if scfg.get("mode") == "agent":
             tok = scfg.get("key", "")
             seen = float(store.get_kv(f"agent_seen::{tok}", "0") or 0)
             online = seen > 0 and (time.time() - seen) < max(60, iv * 3)
+            log_ok = store.get_kv(f"agent_logok::{tok}", "1") == "1"
             met = {}
             try:
                 met = json.loads(store.get_kv(f"agent_metrics::{tok}", "{}") or "{}")
             except ValueError:
                 pass
-            status = '<span class="on">● 在线</span>' if online else '<span class="off">○ 离线</span>'
-            metstr = (f'CPU {met.get("cpu","-")}% 内存 {met.get("mem","-")}% 磁盘 {met.get("disk","-")}%'
-                      if met else "尚无数据")
-            lp = scfg.get("log_path", "") or "默认 /www/wwwlogs/neigui_sub.log"
+            # 三色状态: 离线红 / 日志异常黄 / 正常绿
+            if not online:
+                dot = '<span style="color:#e5484d">● 离线</span>'
+            elif not log_ok:
+                dot = '<span style="color:#e6a23c">● 日志异常</span>'
+            else:
+                dot = '<span style="color:#3ab76a">● 正常运行</span>'
+            metstr = (f'<span class="dim small">CPU {met.get("cpu","-")}% 内存 {met.get("mem","-")}% 磁盘 {met.get("disk","-")}%</span>'
+                      if met and online else '')
             detail_cell = (
-                f'<div>探针 · {status} <span class="dim small">{metstr}</span></div>'
-                f'<div class="dim small">日志: {esc(lp)}</div>'
+                f'<div>探针 · {dot} {metstr}</div>'
                 f'<button class="btn sm ghost" type="button" style="margin-top:4px" '
                 f'onclick="cpAgent(\'{esc(tok)}\')">复制安装命令</button>')
             edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
-                         f'data-mode="agent" data-path="{esc(scfg.get("log_path",""))}"')
+                         f'data-mode="agent" data-path="{esc(scfg.get("log_path",""))}" '
+                         f'data-sync="{smode}" data-interval="{iv}"')
             edit_fn = "editLog"
         elif kind == "logfile":
             detail_cell = _source_detail(s)
             edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
-                         f'data-mode="file" data-path="{esc(scfg.get("path",""))}"')
+                         f'data-mode="file" data-path="{esc(scfg.get("path",""))}" '
+                         f'data-sync="{smode}" data-interval="{iv}"')
             edit_fn = "editLog"
         else:  # v2board
             detail_cell = _source_detail(s)
@@ -414,7 +434,8 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
                          f'data-user="{esc(scfg.get("user",""))}" data-db="{esc(_mask(scfg.get("database","")))}" '
                          f'data-prefix="{esc(scfg.get("prefix","v2_"))}" '
                          f'data-email="{esc(cm.get("email",""))}" data-created="{esc(cm.get("created",""))}" '
-                         f'data-expired="{esc(cm.get("expired",""))}"')
+                         f'data-expired="{esc(cm.get("expired",""))}" '
+                         f'data-sync="{smode}" data-interval="{iv}"')
             edit_fn = "editV2b"
         rows += f"""
         <tr>
@@ -426,15 +447,7 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
               <label class="switch"><input type="checkbox" {'checked' if on else ''} onchange="this.form.submit()"><span class="track"></span></label>
             </form>
           </td>
-          <td>
-            {sync_mode}
-            <form method="post" action="/sources/auto" class="inlineform">
-              <input type="hidden" name="id" value="{s['id']}">
-              <label class="chk small"><input type="checkbox" name="auto" {'checked' if auto else ''}> 自动</label>
-              <input name="interval" type="number" min="30" value="{iv}" style="max-width:78px" title="间隔秒">
-              <button class="btn sm ghost">保存</button>
-            </form>
-          </td>
+          <td class="small">{sync_txt}</td>
           <td class="actions">
             <form method="post" action="/sources/run"><input type="hidden" name="id" value="{s['id']}"><button class="btn sm">{verb}</button></form>
             <button class="btn sm ghost" type="button" onclick="{edit_fn}(this)" {edit_attr}>编辑</button>
@@ -481,6 +494,20 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
     </div>{extra}{modals}"""
 
 
+def _sync_field(pfx: str) -> str:
+    return f"""
+    <div class="mfield"><label class="dim small">同步方式</label>
+      <input type="hidden" name="sync_mode" id="{pfx}_sync" value="manual">
+      <div class="segbar">
+        <button type="button" class="seg" id="{pfx}_sm" onclick="setSync('{pfx}','manual')">手动</button>
+        <button type="button" class="seg" id="{pfx}_sa" onclick="setSync('{pfx}','auto')">自动</button>
+        <button type="button" class="seg" id="{pfx}_sf" onclick="setSync('{pfx}','follow')">跟随全局</button>
+      </div>
+      <div style="margin-top:8px" id="{pfx}_ivwrap">间隔 <input name="interval" id="{pfx}_iv" type="number" min="30" value="300" style="max-width:90px;display:inline-block;width:auto"> 秒
+        <div class="dim small" style="margin-top:4px">自动: 按此间隔独立运行; 跟随全局: 仅当「运行控制」总开关开启时才自动。</div></div>
+    </div>"""
+
+
 def _log_modals() -> str:
     return """
     <div class="modal-bg" id="addLog"><div class="modal">
@@ -509,6 +536,7 @@ def _log_modals() -> str:
         <div class="mfield"><label class="dim small" id="el_lbl">日志路径</label>
           <textarea name="path" id="el_path" rows="3" placeholder="每行一个路径或通配, 如 /www/wwwlogs/*sub.log"></textarea>
           <div class="dim small" style="margin-top:4px">多个路径每行一个; 按日期滚动的日志用通配 *(如 <code>/www/wwwlogs/2026*su.log</code>)。</div></div>
+        """ + _sync_field("el") + """
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('editLog')">取消</button><button class="btn">保存</button></div>
       </form>
     </div></div>"""
@@ -556,6 +584,7 @@ def _v2b_modals() -> str:
           <input name="col_plan" id="ev_col_plan" placeholder="套餐列(默认 plan_id)"></div>
         <div class="mfield row2"><input name="col_created" id="ev_col_created" placeholder="注册时间列(默认 created_at)">
           <input name="col_expired" id="ev_col_expired" placeholder="到期时间列(默认 expired_at)"></div>
+        """ + _sync_field("ev") + """
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('editV2b')">取消</button><button class="btn">保存</button></div>
       </form>
     </div></div>"""
@@ -587,7 +616,13 @@ def render_controls(store: Store) -> str:
     last_run_ts = store.get_kv("last_run_ts", "")
     man_cls = "seg active" if not enabled else "seg"
     auto_cls = "seg active" if enabled else "seg"
-    n_auto = sum(1 for s in store.list_sources() if (s["auto"] if "auto" in s.keys() else 0) and s["enabled"])
+    def _smode(s):
+        try:
+            return json.loads(s["config"] or "{}").get("sync_mode", "manual")
+        except (ValueError, TypeError):
+            return "manual"
+    n_follow = sum(1 for s in store.list_sources() if s["enabled"] and _smode(s) == "follow")
+    n_auto = sum(1 for s in store.list_sources() if s["enabled"] and _smode(s) == "auto")
     return f"""
     <div class="card">
       <div class="card-title">运行模式</div>
@@ -597,15 +632,15 @@ def render_controls(store: Store) -> str:
           <button name="mode" value="auto" class="{auto_cls}">自动运行</button>
         </div>
         <span class="autostat">
-          {'自动模式: 后台按各数据源的「同步方式」定时运行, 当前 ' + str(n_auto) + ' 个源开启自动。'
-            if enabled else '手动模式: 后台不自动运行, 需手动触发。'}
+          {f'开启: {n_follow} 个「跟随全局」源会自动运行; 另有 {n_auto} 个「自动」源独立运行(不受此开关影响)。'
+            if enabled else f'关闭: {n_follow} 个「跟随全局」源暂停; {n_auto} 个「自动」源仍独立运行。'}
         </span>
       </form>
       <div style="margin-top:14px"><form method="post" action="/run/all"><button class="btn">▶ 立即手动运行全部</button></form></div>
       <div class="lastrun" style="margin-top:12px">最近一次: <b>{esc(last_run)}</b> <span class="dim">{esc(last_run_ts)}</span></div>
     </div>
     <div class="card">
-      <div class="dim small">提示: 每个 v2board / 日志源可在各自页面单独设「自动/手动」及间隔; 此处的「自动运行」是总开关, 关闭则所有源都不自动执行。</div>
+      <div class="dim small">每个源在「编辑」里设同步方式: <b>手动</b>(不自动)/ <b>自动</b>(按自己间隔独立跑)/ <b>跟随全局</b>(由此总开关决定)。此处总开关只控制「跟随全局」的源。</div>
     </div>"""
 
 
@@ -1347,6 +1382,13 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
 <script>
   function openM(id){{document.getElementById(id).classList.add('open');}}
   function closeM(id){{document.getElementById(id).classList.remove('open');}}
+  function setSync(pfx,m){{
+    document.getElementById(pfx+'_sync').value=m;
+    document.getElementById(pfx+'_sm').classList.toggle('active',m=='manual');
+    document.getElementById(pfx+'_sa').classList.toggle('active',m=='auto');
+    document.getElementById(pfx+'_sf').classList.toggle('active',m=='follow');
+    document.getElementById(pfx+'_ivwrap').style.display=(m=='manual')?'none':'block';
+  }}
   function logMode(m){{
     document.getElementById('logMode').value=m;
     document.getElementById('lm_a').classList.toggle('active',m=='agent');
@@ -1360,6 +1402,8 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     document.getElementById('el_name').value=b.dataset.name;
     document.getElementById('el_path').value=b.dataset.path||'';
     document.getElementById('el_lbl').textContent=(b.dataset.mode=='agent')?'探针日志路径(下发给探针, 留空用默认)':'本地日志路径';
+    document.getElementById('el_iv').value=b.dataset.interval||'300';
+    setSync('el', b.dataset.sync||'manual');
     openM('editLog');
   }}
   function editV2b(b){{
@@ -1375,6 +1419,8 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     document.getElementById('ev_col_created').value=b.dataset.created||'';
     document.getElementById('ev_col_expired').value=b.dataset.expired||'';
     document.getElementById('ev_col_plan').value='';
+    document.getElementById('ev_iv').value=b.dataset.interval||'300';
+    setSync('ev', b.dataset.sync||'manual');
     openM('editV2b');
   }}
   function cpAgent(t){{
@@ -1608,6 +1654,7 @@ class Handler(BaseHTTPRequestHandler):
                 n = store.add_pulls(recs)
                 store.set_kv(f"agent_metrics::{key}", json.dumps(payload.get("metrics", {})))
                 store.set_kv(f"agent_seen::{key}", str(time.time()))
+                store.set_kv(f"agent_logok::{key}", "1" if payload.get("log_ok") else "0")
                 self._send(json.dumps({"ok": n}).encode(), "application/json; charset=utf-8")
             finally:
                 store.close()
@@ -1732,7 +1779,14 @@ class Handler(BaseHTTPRequestHandler):
                             cfg["log_path"] = p
                         else:
                             cfg["path"] = p
+                    # 同步方式: 手动/自动/跟随全局 + 间隔
+                    smode = form.get("sync_mode", "manual")
+                    if smode not in ("manual", "auto", "follow"):
+                        smode = "manual"
+                    cfg["sync_mode"] = smode
+                    iv = int(form.get("interval", "300") or 300)
                     store.update_source(src["id"], name, json.dumps(cfg))
+                    store.set_source_auto(src["id"], 1 if smode != "manual" else 0, iv)
                 self._back(); return
             if path == "/sources/delete":
                 store.delete_source(int(form["id"])); self._back(); return

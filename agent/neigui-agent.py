@@ -130,13 +130,15 @@ def main():
             if cfg.get("log_path"):          # 中央下发的日志路径优先
                 log_path = cfg["log_path"]
         lines, newstate = [], state
+        log_ok = os.path.exists(log_path)
         try:
-            if os.path.exists(log_path):
+            if log_ok:
                 lines, newstate = read_new(log_path, state)
         except Exception:
-            pass
+            log_ok = False
         ok = http_post(f"{a.master}/api/agent/report?token={a.token}",
-                       {"logs": lines, "metrics": metrics()})
+                       {"logs": lines, "metrics": metrics(),
+                        "log_ok": log_ok, "log_path": log_path})
         if ok:  # 上报成功才推进 offset, 不丢日志
             state = newstate
             try:
