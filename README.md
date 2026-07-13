@@ -18,10 +18,10 @@
 完整步骤见 [部署文档.md](部署文档.md)。速览:
 
 ```bash
-# 中央主控(一台 VPS, Python 3.8+)
-git clone https://github.com/arieeses/Spyware.git /opt/spyware && cd /opt/spyware
-pip3 install pymysql
-python3 -m neigui.web --host 127.0.0.1 --port 8787   # 前面套 Nginx HTTPS 反代
+# 中央主控 · 一键安装(自动装依赖+systemd服务+开机自启)
+git clone https://github.com/arieeses/Spyware.git spyware && cd spyware
+sudo bash install.sh
+# 然后在 aaPanel/宝塔 加网站反代到 127.0.0.1:8787 + HTTPS, 打开 /register
 ```
 - 首次打开注册管理员 → 加 v2board 面板(只读同步)→ 加探针源、在各面板机一键装探针。
 - 面板机 Nginx 配 `neigui` 日志格式 + `real_ip`;订阅网关按 `/api/decision` 分级下发。
