@@ -50,6 +50,7 @@ def analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
             email=(u["email"] if "email" in cols else None),
             user_id=(u["user_id"] if "user_id" in cols else None),
             panel=(u["panel"] if "panel" in cols else None),
+            plan=(u["plan"] if "plan" in cols else None),
             traffic_bytes=(u["traffic_bytes"] or 0) if "traffic_bytes" in cols else 0,
             created_at=_pdt(u["created_at"]) if "created_at" in cols else None,
             expired_at=_pdt(u["expired_at"]) if "expired_at" in cols else None,

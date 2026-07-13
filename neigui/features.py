@@ -30,6 +30,7 @@ class TokenFeatures:
     user_id: Optional[int] = None
     group_id: Optional[int] = None
     panel: Optional[str] = None
+    plan: Optional[str] = None
     traffic_bytes: int = 0
     created_at: Optional[datetime] = None
     expired_at: Optional[datetime] = None
@@ -103,6 +104,7 @@ def build_features(token: str, pull_rows: List, user_row,
         f.user_id = user_row["user_id"]
         f.group_id = user_row["group_id"]
         f.panel = user_row["panel"] if "panel" in user_row.keys() else None
+        f.plan = user_row["plan"] if "plan" in user_row.keys() else None
         f.traffic_bytes = user_row["traffic_bytes"] or 0
         f.created_at = _parse_dt(user_row["created_at"])
         f.expired_at = _parse_dt(user_row["expired_at"] if "expired_at" in user_row.keys() else None)

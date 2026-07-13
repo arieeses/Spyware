@@ -29,6 +29,7 @@ class RiskResult:
     email: Optional[str] = None
     user_id: Optional[int] = None
     panel: Optional[str] = None
+    plan: Optional[str] = None
     distinct_ips: int = 0
     pull_count: int = 0
     last_pull: Optional[datetime] = None
@@ -52,9 +53,9 @@ def _level(score: float, th) -> str:
 
 
 def _display(f: TokenFeatures) -> dict:
-    return dict(email=f.email, user_id=f.user_id, panel=f.panel, distinct_ips=f.distinct_ips,
-                pull_count=f.pull_count, last_pull=f.last_pull, traffic_bytes=f.traffic_bytes,
-                created_at=f.created_at, expired_at=f.expired_at)
+    return dict(email=f.email, user_id=f.user_id, panel=f.panel, plan=f.plan,
+                distinct_ips=f.distinct_ips, pull_count=f.pull_count, last_pull=f.last_pull,
+                traffic_bytes=f.traffic_bytes, created_at=f.created_at, expired_at=f.expired_at)
 
 
 def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskResult:

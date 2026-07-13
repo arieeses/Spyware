@@ -212,6 +212,60 @@ def _th_attr(k: str) -> str:
     return ' data-t="num"' if k in _NUM_COLS else ''
 
 
+def _human_bytes(n) -> str:
+    n = float(n or 0)
+    for u in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024:
+            return f"{n:.1f}{u}"
+        n /= 1024
+    return f"{n:.1f}PB"
+
+
+def _user_detail(store, tok: str) -> dict:
+    from .enrich import Blacklist, IpClassifier, UaClassifier
+    from .features import build_features
+    from .pipeline import _disabled_signals
+    from .scoring import score_token
+    user = store.user(tok)
+    pulls = list(store.pulls_for(tok))
+    if not user and not pulls:
+        return {"error": "未找到该用户"}
+    r = score_token(build_features(tok, pulls, user, IpClassifier(), UaClassifier(), Blacklist()),
+                    CONFIG, _disabled_signals(store))
+    plan = user["plan"] if user and "plan" in user.keys() else None
+    has_plan = bool(plan and str(plan) not in ("", "0", "None"))
+    if r.expired_at:
+        exp = r.expired_at.strftime("%Y-%m-%d %H:%M")
+    elif r.created_at:
+        exp = "永久" if has_plan else "未购买"
+    else:
+        exp = "-"
+    d = {
+        "token": tok, "email": r.email, "user_id": r.user_id, "panel": r.panel,
+        "plan": (f"套餐 #{plan}" if has_plan else None),
+        "created_at": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "-",
+        "expired": exp,
+        "banned": (user["banned"] if user and "banned" in user.keys() else 0),
+        "traffic": _human_bytes(r.traffic_bytes), "score": r.score, "level": r.level,
+        "signals": [s.name for s in r.signals],
+        "pull_count": r.pull_count, "distinct_ips": r.distinct_ips,
+        "pulls": [{"ts": (p["ts"] or "")[:19].replace("T", " "), "ip": p["ip"],
+                   "ua": (p["ua"] or "")[:30]} for p in pulls[-15:][::-1]],
+    }
+    orders, omsg = [], "无订单记录"
+    if r.panel and r.user_id:
+        src = next((s for s in store.list_sources()
+                    if s["type"] == "v2board" and s["name"] == r.panel), None)
+        if src:
+            try:
+                from .connectors.v2board import V2BoardConnector
+                orders = V2BoardConnector(json.loads(src["config"] or "{}")).query_orders(r.user_id)
+            except Exception as e:  # noqa: BLE001
+                omsg = f"订单查询失败: {e}"
+    d["orders"], d["orders_msg"] = orders, omsg
+    return d
+
+
 def _mask(s: str) -> str:
     """打码: 只显示首尾, 中间星号。用于二次编辑时不明文回显库名/IP。"""
     s = str(s or "")
@@ -1004,7 +1058,9 @@ def render_entities(store: Store, kind: str) -> str:
 
 
 def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str = "",
-                    size: str = "30", page: str = "1") -> str:
+                    size: str = "10", page: str = "1") -> str:
+    if str(size) not in ("10", "50", "100", "150"):
+        size = "10"
     results = analyze(store)
     counts = {"高": 0, "中": 0, "低": 0, "正常": 0}
     excluded = 0
@@ -1039,7 +1095,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     for pn in sorted(panels):
         active = "active" if panel_flt == pn else ""
         ptabs += f'<a class="tab {active}" href="/risk?level={lf}&panel={quote(pn)}">{esc(pn)}</a>'
-    panel_bar = f'<div class="tabs"><span class="dim small" style="align-self:center;margin-right:4px">机场:</span>{ptabs}</div>' if panels else ""
+    panel_bar = f'<div class="tabs">{ptabs}</div>' if panels else ""
 
     # 过滤(等级/机场/搜索)
     slc = search.lower()
@@ -1078,8 +1134,13 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
             tags_html = '<span class="rtag" style="background:#8b8f8822;color:#8b8f98">自有基础设施</span>'
         detail = " | ".join(f"{s.name}(+{s.points})" for s in r.signals) or "无命中信号"
         reg = r.created_at.strftime("%Y-%m-%d") if r.created_at else "-"
-        exp = ("永久" if r.expired_at is None and r.created_at else
-               (r.expired_at.strftime("%Y-%m-%d") if r.expired_at else "-"))
+        has_plan = bool(r.plan and str(r.plan) not in ("", "0", "None"))
+        if r.expired_at:
+            exp = r.expired_at.strftime("%Y-%m-%d")
+        elif r.created_at:
+            exp = "永久" if has_plan else "未购买"   # 有套餐=永久; 无套餐=未购买
+        else:
+            exp = "-"
         cell = {
             "uid": f'<td class="mono small">{esc(r.user_id if r.user_id is not None else "-")}</td>',
             "email": f'<td class="small">{esc(r.email or "-")}</td>',
@@ -1096,7 +1157,8 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
             "expired": f'<td class="small" style="{"color:#e5484d" if expired else "color:#8a8a8a"}">{exp}</td>',
             "last": f'<td class="small dim">{_humanize(r.last_pull)}</td>',
         }
-        rows += f'<tr title="{esc(detail)}">' + "".join(cell[k] for k, _ in vis) + "</tr>"
+        rows += (f'<tr title="{esc(detail)}" style="cursor:pointer" onclick="userDetail(\'{esc(r.token)}\')">'
+                 + "".join(cell[k] for k, _ in vis) + "</tr>")
     if not rows:
         rows = f'<tr><td colspan="{len(vis)}" class="dim" style="padding:20px">暂无用户</td></tr>'
 
@@ -1132,7 +1194,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     return f"""
     <div class="card">
       <div class="card-title">用户风险管理
-        <button class="btn sm ghost" type="button" style="margin-left:8px" onclick="openM('colModal')">列 ▾</button>
+        <button class="btn sm ghost" type="button" style="margin-left:8px" onclick="openM('colModal')">显示列 ▾</button>
         {searchbox}</div>
       <div class="chips">{chips}</div>
       <div class="tabs">{tabs}</div>
@@ -1143,8 +1205,13 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         <tbody>{rows}</tbody>
       </table></div>
       {pager}
-      <div class="dim small" style="margin-top:8px">机场归属来自 v2board 同步; 红色到期时间=已到期; 点表头排序; 「列 ▾」可选择显示哪些列。</div>
-    </div>{col_modal}"""
+      <div class="dim small" style="margin-top:8px">点用户行看详情(账号/流量/订单/拉取记录); 红色到期=已到期; 「显示列 ▾」可选列。</div>
+    </div>{col_modal}
+    <div class="modal-bg" id="userModal"><div class="modal" style="width:min(560px,94vw)">
+      <div style="display:flex;align-items:center"><h3 style="margin:0">用户详情</h3>
+        <button class="btn sm ghost" type="button" style="margin-left:auto" onclick="closeM('userModal')">关闭</button></div>
+      <div id="userBody" class="udetail"><div class="dim">加载中…</div></div>
+    </div></div>"""
 
 
 # ————————————————— 登录/注册/找回 —————————————————
@@ -1386,8 +1453,13 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .modal input, .modal textarea {{ width:100%; padding:8px 10px; border:1px solid #d5dae1; border-radius:7px; font-size:13px; font-family:inherit; }}
   .modal .row2 {{ display:flex; gap:8px; }}
   .modal-actions {{ display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }}
-  .modal .collist {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }}
-  .modal .collist label {{ display:flex; align-items:center; gap:6px; font-size:13px; margin:0; }}
+  .modal .collist {{ display:grid; grid-template-columns:1fr 1fr; gap:10px 18px; margin-top:12px; }}
+  .modal .collist label {{ display:flex; align-items:center; gap:8px; font-size:14px; margin:0; white-space:nowrap; }}
+  .udetail {{ font-size:13px; }}
+  .udetail h4 {{ margin:16px 0 6px; font-size:14px; }}
+  .udetail table {{ width:100%; border-collapse:collapse; }}
+  .udetail td {{ padding:5px 8px; border-bottom:1px solid var(--line); }}
+  .udetail td:first-child {{ color:var(--dim); width:96px; }}
   .pager {{ display:flex; gap:4px; align-items:center; justify-content:flex-end; margin-top:14px; flex-wrap:wrap; }}
   .pg {{ min-width:30px; height:30px; padding:0 8px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:6px; text-decoration:none; color:var(--txt); font-size:13px; }}
   .pg:hover {{ border-color:var(--pri); }}
@@ -1502,6 +1574,35 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     document.getElementById('ev_iv').value=b.dataset.interval||'300';
     setSync('ev', b.dataset.sync||'manual');
     openM('editV2b');
+  }}
+  function esc0(s){{return (s==null?'':(''+s)).replace(/[&<>]/g,function(c){{return {{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c];}});}}
+  function userDetail(tok){{
+    openM('userModal');
+    document.getElementById('userBody').innerHTML='<div class="dim">加载中…</div>';
+    fetch('/api/user?token='+encodeURIComponent(tok)).then(function(r){{return r.json();}}).then(function(d){{
+      if(d.error){{document.getElementById('userBody').innerHTML='<div class="dim">'+esc0(d.error)+'</div>';return;}}
+      var h='<h4>账号信息</h4><table>';
+      h+='<tr><td>邮箱</td><td>'+esc0(d.email)+'</td></tr>';
+      h+='<tr><td>用户ID</td><td>'+esc0(d.user_id)+'</td></tr>';
+      h+='<tr><td>机场</td><td>'+esc0(d.panel)+'</td></tr>';
+      h+='<tr><td>套餐</td><td>'+esc0(d.plan||'未购买')+'</td></tr>';
+      h+='<tr><td>注册时间</td><td>'+esc0(d.created_at)+'</td></tr>';
+      h+='<tr><td>到期时间</td><td>'+esc0(d.expired)+'</td></tr>';
+      h+='<tr><td>状态</td><td>'+(d.banned?'<span style="color:#e5484d">已封禁</span>':'正常')+'</td></tr>';
+      h+='<tr><td>Token</td><td style="font-family:monospace;word-break:break-all">'+esc0(d.token)+'</td></tr>';
+      h+='<tr><td>已用流量</td><td>'+esc0(d.traffic)+'</td></tr>';
+      h+='</table>';
+      h+='<h4>风险</h4><table><tr><td>风险分</td><td>'+esc0(d.score)+' ('+esc0(d.level)+')</td></tr>';
+      h+='<tr><td>命中信号</td><td>'+(d.signals&&d.signals.length?esc0(d.signals.join(' / ')):'无')+'</td></tr>';
+      h+='<tr><td>拉取/IP</td><td>'+esc0(d.pull_count)+' 次 / '+esc0(d.distinct_ips)+' IP</td></tr></table>';
+      h+='<h4>最近拉取记录</h4>';
+      if(d.pulls&&d.pulls.length){{h+='<table>';d.pulls.forEach(function(p){{h+='<tr><td>'+esc0(p.ts)+'</td><td>'+esc0(p.ip)+' · '+esc0(p.ua)+'</td></tr>';}});h+='</table>';}}
+      else h+='<div class="dim">暂无拉取记录(未接入订阅日志)</div>';
+      h+='<h4>订单记录</h4>';
+      if(d.orders&&d.orders.length){{h+='<table>';d.orders.forEach(function(o){{h+='<tr><td>'+esc0(o.created_at)+'</td><td>￥'+esc0(o.amount)+' · '+esc0(o.status)+'</td></tr>';}});h+='</table>';}}
+      else h+='<div class="dim">'+esc0(d.orders_msg||'无订单记录')+'</div>';
+      document.getElementById('userBody').innerHTML=h;
+    }}).catch(function(){{document.getElementById('userBody').innerHTML='<div class="dim">加载失败</div>';}});
   }}
   function cpAgent(t){{
     var c='curl -fsSL "'+location.origin+'/agent/install.sh?token='+t+'" | bash';
@@ -1679,6 +1780,11 @@ class Handler(BaseHTTPRequestHandler):
                            "application/json; charset=utf-8")
                 return
 
+            if path == "/api/user":
+                self._send(json.dumps(_user_detail(store, q.get("token", [""])[0]),
+                                      ensure_ascii=False).encode(), "application/json; charset=utf-8")
+                return
+
             if path not in VIEWS:
                 self._send(b"404", "text/plain; charset=utf-8")
                 return
@@ -1692,7 +1798,7 @@ class Handler(BaseHTTPRequestHandler):
             elif active == "risk":
                 content = render_risklist(store, q.get("level", ["all"])[0],
                                           q.get("panel", ["all"])[0], q.get("q", [""])[0],
-                                          q.get("size", ["30"])[0], q.get("page", ["1"])[0])
+                                          q.get("size", ["10"])[0], q.get("page", ["1"])[0])
             elif active == "rules":
                 content = render_rules(store)
             elif active == "whitelist":

@@ -84,6 +84,31 @@ class V2BoardConnector:
             conn.close()
         return n
 
+    _ORDER_STATUS = {0: "待支付", 1: "开通中", 2: "已取消", 3: "已完成", 4: "已折抵"}
+
+    def query_orders(self, user_id, limit: int = 20):
+        """实时查该用户订单(v2_order)。金额单位分→元。"""
+        prefix = self.cfg.get("prefix", "v2_")
+        conn = self._connect()
+        out = []
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT trade_no, total_amount, status, created_at "
+                    f"FROM {prefix}order WHERE user_id=%s ORDER BY id DESC LIMIT %s",
+                    (user_id, limit))
+                for row in cur.fetchall():
+                    ca = _epoch_to_iso(row.get("created_at"))
+                    out.append({
+                        "trade_no": row.get("trade_no"),
+                        "amount": round((row.get("total_amount") or 0) / 100, 2),
+                        "status": self._ORDER_STATUS.get(row.get("status"), row.get("status")),
+                        "created_at": ca[:10] if ca else "",
+                    })
+        finally:
+            conn.close()
+        return out
+
     # 非协议节点的 v2_server_* 表(排除)
     NON_NODE_SUFFIX = {"group", "route"}
 
