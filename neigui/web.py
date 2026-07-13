@@ -715,11 +715,20 @@ def render_runlog(store: Store, kind: str = "", name: str = "", size: str = "10"
     if not rows:
         rows = '<tr><td colspan="5" class="dim" style="padding:16px">暂无运行记录</td></tr>'
 
-    # 按已添加数据源分类
-    src_names = [s["name"] for s in store.list_sources()]
-    tabs = f'<a class="tab {"active" if not name else ""}" href="/runlog?size={quote(size)}">全部</a>'
-    for sn in src_names:
-        tabs += f'<a class="tab {"active" if name==sn else ""}" href="/runlog?name={quote(sn)}&size={quote(size)}">{esc(sn)}</a>'
+    # 一级: 全部 / 前端面板(v2board) / 日志接入(logfile)
+    none_sel = not kind and not name
+    top = (f'<a class="tab {"active" if none_sel else ""}" href="/runlog?size={quote(size)}">全部</a>'
+           f'<a class="tab {"active" if kind=="v2board" else ""}" href="/runlog?kind=v2board&size={quote(size)}">前端面板</a>'
+           f'<a class="tab {"active" if kind=="logfile" else ""}" href="/runlog?kind=logfile&size={quote(size)}">日志接入</a>')
+    # 二级: 选了一级类型后, 展开该类下的数据源
+    sub = ""
+    if kind:
+        subs = [s["name"] for s in store.list_sources() if s["type"] == kind]
+        sub = f'<div class="tabs" style="margin-top:0"><a class="tab {"active" if not name else ""}" href="/runlog?kind={kind}&size={quote(size)}">该类全部</a>'
+        for sn in subs:
+            sub += f'<a class="tab {"active" if name==sn else ""}" href="/runlog?kind={kind}&name={quote(sn)}&size={quote(size)}">{esc(sn)}</a>'
+        sub += "</div>"
+    tabs = top
 
     pager = _pager_html("/runlog", {k: v for k, v in (("kind", kind), ("name", name)) if v},
                         size if str(size) in ("10", "20", "50", "100", "200") else "10",
@@ -733,6 +742,7 @@ def render_runlog(store: Store, kind: str = "", name: str = "", size: str = "10"
     <div class="card">
       <div class="card-title">运行日志 <span class="dim small" style="font-weight:400;margin-left:8px">共 {total} 条</span>{clear}</div>
       <div class="tabs">{tabs}</div>
+      {sub}
       <div class="tablewrap"><table class="grid">
         <thead><tr><th>时间</th><th>结果</th><th>类型</th><th>名称</th><th>消息</th></tr></thead>
         <tbody>{rows}</tbody>
@@ -1455,6 +1465,7 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .modal .mfield {{ margin-top:12px; }}
   .modal .mfield label {{ display:block; margin-bottom:4px; }}
   .modal input, .modal textarea {{ width:100%; padding:8px 10px; border:1px solid #d5dae1; border-radius:7px; font-size:13px; font-family:inherit; }}
+  .modal input[type=checkbox] {{ width:auto; padding:0; }}
   .modal .row2 {{ display:flex; gap:8px; }}
   .modal-actions {{ display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }}
   .modal .collist {{ display:grid; grid-template-columns:1fr 1fr; gap:10px 18px; margin-top:12px; }}
@@ -1724,7 +1735,11 @@ class Handler(BaseHTTPRequestHandler):
                 src = _source_by_key(store, key)
                 interval = (src["interval"] if src and "interval" in src.keys() else 60) or 60
                 lp = json.loads(src["config"] or "{}").get("log_path", "") if src else ""
-                self._send(json.dumps({"interval": interval, "log_path": lp, "commands": []}).encode(),
+                force = store.get_kv(f"agent_force::{key}", "") == "1"
+                if force:
+                    store.set_kv(f"agent_force::{key}", "0")  # 一次性
+                self._send(json.dumps({"interval": interval, "log_path": lp,
+                                       "report_now": force, "commands": []}).encode(),
                            "application/json; charset=utf-8")
                 return
 

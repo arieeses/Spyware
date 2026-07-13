@@ -19,9 +19,11 @@ def _expand_paths(spec: str):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        if any(ch in line for ch in "*?[") or "202" in os.path.basename(line):
+        if os.path.isdir(line):
+            files.extend(glob.glob(os.path.join(line, "*.log")))
+        elif any(ch in line for ch in "*?["):
             files.extend(glob.glob(line))
-        elif os.path.exists(line):
+        elif os.path.isfile(line):
             files.append(line)
     return sorted(set(os.path.abspath(f) for f in files))
 
@@ -89,7 +91,8 @@ def _run_source(store: Store, src) -> Tuple[bool, str]:
             if cfg.get("mode") == "syslog":
                 return True, "syslog 直发: 由 Nginx 直接发送, 无需手动导入"
             if cfg.get("mode") == "agent":
-                return True, "探针接入: 由被控 agent 上报, 无需手动导入"
+                store.set_kv(f"agent_force::{cfg.get('key', '')}", "1")
+                return True, "已通知探针立即上报(约数秒内刷新查看)"
             n, nf, _ = ingest_logfile(store, cfg["path"])
             return True, f"导入 {n} 条新记录(匹配 {nf} 个文件)"
         if src["type"] == "v2board":

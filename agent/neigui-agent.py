@@ -87,11 +87,30 @@ def metrics():
     return m
 
 
-def read_new(path, state):
-    """增量读 + 轮转/截断处理(inode 变或 size<offset → 从头)。"""
-    st = os.stat(path)
-    off = state.get("offset", 0)
-    if state.get("inode") != st.st_ino or st.st_size < off:
+import glob as _glob
+
+
+def expand_paths(spec):
+    """spec 可多行; 每行为文件/通配/目录。目录→目录下 *.log; 通配→展开。返回实际文件列表。"""
+    files = []
+    for line in (spec or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if os.path.isdir(line):
+            files.extend(_glob.glob(os.path.join(line, "*.log")))
+        elif any(ch in line for ch in "*?["):
+            files.extend(_glob.glob(line))
+        elif os.path.isfile(line):
+            files.append(line)
+    return sorted(set(files))
+
+
+def read_new_file(path, st):
+    """单文件增量读; st=该文件的 {offset,inode}。返回 (新行, 新st)。"""
+    stat = os.stat(path)
+    off = st.get("offset", 0)
+    if st.get("inode") != stat.st_ino or stat.st_size < off:
         off = 0
     lines = []
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -104,7 +123,22 @@ def read_new(path, state):
             if ln:
                 lines.append(ln)
         end = f.tell()
-    return lines, {"offset": end, "inode": st.st_ino}
+    return lines, {"offset": end, "inode": stat.st_ino}
+
+
+def collect(spec, state):
+    """按 spec 读所有匹配文件的新增行(state 按文件路径分别记 offset)。
+    返回 (行列表, 新state, 是否有可读文件)。"""
+    files = expand_paths(spec)
+    lines, newstate = [], dict(state)
+    for fp in files:
+        try:
+            fl, fst = read_new_file(fp, state.get(fp, {}))
+            lines.extend(fl)
+            newstate[fp] = fst
+        except Exception:
+            pass
+    return lines, newstate, bool(files)
 
 
 def main():
@@ -121,38 +155,40 @@ def main():
             state = json.load(f)
     except Exception:
         pass
+    if not isinstance(state, dict):
+        state = {}
 
-    interval = 5
+    POLL = 5           # 每 5s 拉一次配置(轻), 用于立即上报
+    report_interval = 300
     log_path = a.log
+    last_report = 0.0
     while True:
         cfg = http_get(f"{a.master}/api/agent/config?token={a.token}")
+        force = False
         if cfg:
-            if cfg.get("interval"):
-                try:
-                    interval = int(cfg["interval"])
-                except (ValueError, TypeError):
-                    pass
-            if cfg.get("log_path"):          # 中央下发的日志路径优先
-                log_path = cfg["log_path"]
-        lines, newstate = [], state
-        log_ok = os.path.exists(log_path)
-        try:
-            if log_ok:
-                lines, newstate = read_new(log_path, state)
-        except Exception:
-            log_ok = False
-        ok = http_post(f"{a.master}/api/agent/report?token={a.token}",
-                       {"logs": lines, "metrics": metrics(),
-                        "log_ok": log_ok, "log_path": log_path})
-        if ok:  # 上报成功才推进 offset, 不丢日志
-            state = newstate
             try:
-                os.makedirs(os.path.dirname(a.state), exist_ok=True)
-                with open(a.state, "w", encoding="utf-8") as f:
-                    json.dump(state, f)
-            except Exception:
+                report_interval = max(5, int(cfg.get("interval") or report_interval))
+            except (ValueError, TypeError):
                 pass
-        time.sleep(max(2, interval))
+            if cfg.get("log_path"):
+                log_path = cfg["log_path"]
+            force = bool(cfg.get("report_now"))
+        now = time.time()
+        if force or (now - last_report) >= report_interval:
+            lines, newstate, has_file = collect(log_path, state)
+            ok = http_post(f"{a.master}/api/agent/report?token={a.token}",
+                           {"logs": lines, "metrics": metrics(),
+                            "log_ok": has_file, "log_path": log_path})
+            if ok:
+                state = newstate
+                last_report = now
+                try:
+                    os.makedirs(os.path.dirname(a.state), exist_ok=True)
+                    with open(a.state, "w", encoding="utf-8") as f:
+                        json.dump(state, f)
+                except Exception:
+                    pass
+        time.sleep(POLL)
 
 
 if __name__ == "__main__":
