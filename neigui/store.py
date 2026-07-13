@@ -52,6 +52,15 @@ CREATE TABLE IF NOT EXISTS kv (
   value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS runlog (
+  id   INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts   TEXT,
+  kind TEXT,
+  name TEXT,
+  ok   INTEGER,
+  msg  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS admins (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   username   TEXT UNIQUE,
@@ -119,7 +128,7 @@ class Store:
         return n
 
     def upsert_user(self, token, user_id=None, email=None, plan=None, group_id=None,
-                    created_at=None, traffic_bytes=0, banned=0, panel=None) -> None:
+                    created_at=None, traffic_bytes=0, banned=0, panel=None, commit=True) -> None:
         self.conn.execute(
             """INSERT INTO users(token, user_id, email, plan, group_id,
                                  created_at, traffic_bytes, banned, panel)
@@ -131,6 +140,10 @@ class Store:
                  panel=COALESCE(excluded.panel, users.panel)""",
             (token, user_id, email, plan, group_id, created_at, traffic_bytes, banned, panel),
         )
+        if commit:
+            self.conn.commit()
+
+    def commit(self) -> None:
         self.conn.commit()
 
     def tokens(self) -> List[str]:
@@ -260,6 +273,30 @@ class Store:
     def mark_reset_used(self, token) -> None:
         self.conn.execute("UPDATE resets SET used=1 WHERE token=?", (token,))
         self.conn.commit()
+
+    # —— 运行日志 ——
+    def add_runlog(self, kind: str, name: str, ok: bool, msg: str) -> None:
+        self.conn.execute(
+            "INSERT INTO runlog(ts, kind, name, ok, msg) VALUES(?,?,?,?,?)",
+            (datetime.now().isoformat(timespec="seconds"), kind, name, 1 if ok else 0, msg))
+        self.conn.execute(
+            "DELETE FROM runlog WHERE id NOT IN (SELECT id FROM runlog ORDER BY id DESC LIMIT 500)")
+        self.conn.commit()
+
+    def list_runlog(self, limit: int = 200):
+        return self.conn.execute(
+            "SELECT * FROM runlog ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+    # —— 清理演示/示例数据 ——
+    def purge_demo(self) -> int:
+        demo = ("tok_normal", "tok_insider1", "tok_spoof", "tok_newscout", "tok_selfsvc")
+        qs = ",".join("?" * len(demo))
+        n = self.conn.execute(f"SELECT COUNT(*) c FROM pulls WHERE token IN ({qs})", demo).fetchone()["c"]
+        self.conn.execute(f"DELETE FROM pulls WHERE token IN ({qs})", demo)
+        self.conn.execute(f"DELETE FROM users WHERE token IN ({qs})", demo)
+        self.conn.execute("DELETE FROM sources WHERE name='示例日志'")
+        self.conn.commit()
+        return n
 
     def close(self) -> None:
         self.conn.close()

@@ -51,6 +51,7 @@ ICONS = {
     "rules": '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2"/><circle cx="9" cy="16" r="2"/>',
     "whitelist": '<path d="M12 3l8 3v5c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
     "domains": '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18"/>',
+    "runlog": '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
     "run": '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/>',
     "settings": '<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.5-2.4 1a7 7 0 0 0-1.7-1L14.5 2h-4l-.3 2.4a7 7 0 0 0-1.7 1l-2.4-1-2 3.5L4.1 11a7 7 0 0 0 0 2l-2 1.6 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.3 2.4h4l.3-2.4a7 7 0 0 0 1.7-1l2.4 1 2-3.5-2-1.6a7 7 0 0 0 .1-1z"/>',
     "update": '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/><path d="M12 8v4l3 2"/>',
@@ -77,7 +78,10 @@ NAV = [
         ("whitelist", "白名单/黑名单", "/whitelist"),
         ("domains", "入口域名", "/domains"),
     ]),
-    ("运行", [("run", "运行控制", "/run")]),
+    ("运行", [
+        ("run", "运行控制", "/run"),
+        ("runlog", "运行日志", "/runlog"),
+    ]),
     ("系统", [
         ("settings", "系统设置", "/settings"),
     ]),
@@ -329,22 +333,21 @@ def render_dashboard(store: Store) -> str:
     last_run = store.get_kv("last_run_summary", "尚未运行")
     last_ts = store.get_kv("last_run_ts", "")
 
-    def stat(label, val, color="#5b8def", sub=""):
-        return (f'<div class="stat"><div class="sval" style="color:{color}">{val}</div>'
-                f'<div class="slabel">{label}</div><div class="ssub">{esc(sub)}</div></div>')
+    def stat(label, val, color="#5b8def", sub="", href="#"):
+        return (f'<a class="stat" href="{href}"><div class="sval" style="color:{color}">{val}</div>'
+                f'<div class="slabel">{label}</div><div class="ssub">{esc(sub)}</div></a>')
 
     stats = "".join([
-        stat("高风险", counts["高"], LEVEL_COLOR["高"]),
-        stat("中风险", counts["中"], LEVEL_COLOR["中"]),
-        stat("低风险", counts["低"], LEVEL_COLOR["低"]),
-        stat("正常/排除", f'{counts["正常"]}/{excluded}', "#8b8f98"),
-        stat("用户总数", len(results)),
-        stat("拉取记录", _pull_count(store)),
-        stat("v2board 面板", n_v2b, "#7c5cff"),
-        stat("日志源", n_log, "#7c5cff"),
+        stat("高风险", counts["高"], LEVEL_COLOR["高"], href="/risk?level=高"),
+        stat("中风险", counts["中"], LEVEL_COLOR["中"], href="/risk?level=中"),
+        stat("低风险", counts["低"], LEVEL_COLOR["低"], href="/risk?level=低"),
+        stat("正常/排除", f'{counts["正常"]}/{excluded}', "#8b8f98", href="/risk"),
+        stat("用户总数", len(results), href="/risk"),
+        stat("拉取记录", _pull_count(store), href="/runlog"),
+        stat("v2board 面板", n_v2b, "#7c5cff", href="/panels/v2board"),
+        stat("日志源", n_log, "#7c5cff", href="/panels/log"),
     ])
     return f"""
-    {render_load_panel()}
     <div class="card">
       <div class="card-title">概览</div>
       <div class="stats">{stats}</div>
@@ -482,6 +485,26 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
       </table></div>
       <div class="addforms">{add_form}</div>
     </div>{extra}"""
+
+
+def render_runlog(store: Store) -> str:
+    rows = ""
+    for r in store.list_runlog(200):
+        ok = r["ok"]
+        icon = '<span class="on">✓</span>' if ok else '<span style="color:#e5484d">✗</span>'
+        rows += (f'<tr><td class="small dim">{esc(r["ts"])}</td>'
+                 f'<td>{icon}</td><td>{esc(r["kind"])}</td>'
+                 f'<td>{esc(r["name"])}</td><td class="small">{esc(r["msg"])}</td></tr>')
+    if not rows:
+        rows = '<tr><td colspan="5" class="dim" style="padding:16px">暂无运行记录</td></tr>'
+    return f"""
+    <div class="card">
+      <div class="card-title">运行日志 <span class="dim small" style="font-weight:400;margin-left:8px">最近 200 条(同步/导入/探针上报由调度触发的除外)</span></div>
+      <div class="tablewrap"><table class="grid">
+        <thead><tr><th>时间</th><th>结果</th><th>类型</th><th>名称</th><th>消息</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table></div>
+    </div>"""
 
 
 def render_controls(store: Store) -> str:
@@ -1135,7 +1158,8 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .subtab {{ text-decoration:none; color:var(--dim); padding:9px 18px; font-size:14px; border-bottom:2px solid transparent; margin-bottom:-1px; }}
   .subtab.active {{ color:var(--pri); border-bottom-color:var(--pri); font-weight:500; }}
   .stats {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:12px; }}
-  .stat {{ background:#fafbfc; border:1px solid var(--line); border-radius:8px; padding:14px; }}
+  .stat {{ display:block; background:#fafbfc; border:1px solid var(--line); border-radius:8px; padding:14px; text-decoration:none; color:inherit; transition:.1s; }}
+  .stat:hover {{ border-color:var(--pri); box-shadow:0 1px 4px rgba(20,30,50,.06); }}
   .sval {{ font-size:24px; font-weight:700; }} .slabel {{ font-size:13px; margin-top:2px; }} .ssub {{ font-size:11px; color:var(--dim); }}
   .gauges {{ display:flex; flex-wrap:wrap; gap:10px; justify-content:space-around; }}
   .gauge {{ text-align:center; flex:1; min-width:150px; }}
@@ -1217,6 +1241,7 @@ VIEWS = {
     "/whitelist": ("whitelist", "白名单/黑名单"),
     "/domains": ("domains", "入口域名"),
     "/run": ("run", "运行控制"),
+    "/runlog": ("runlog", "运行日志"),
     "/settings": ("settings", "系统设置"),
 }
 
@@ -1376,6 +1401,8 @@ class Handler(BaseHTTPRequestHandler):
                                          q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "settings":
                 content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0])
+            elif active == "runlog":
+                content = render_runlog(store)
             else:
                 content = render_controls(store)
             self._html(layout(active, title, content, admin["username"] if admin else ""))
@@ -1644,6 +1671,12 @@ def main(argv=None):
     if argv and argv[0] == "resetpw":
         _cli_resetpw(argv[1:])
         return
+    if argv and argv[0] == "purge-demo":
+        s = Store()
+        n = s.purge_demo()
+        s.close()
+        print(f"已清除演示数据: {n} 条示例拉取记录 + 示例用户/日志源")
+        return
 
     p = argparse.ArgumentParser(prog="neigui.web", description="内鬼系统 · 可视化控制后台")
     p.add_argument("--host", default="127.0.0.1")
@@ -1652,7 +1685,6 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     seed = Store()
-    _seed_defaults(seed)
     n_admin = seed.admin_count()
     seed.close()
     Scheduler().start()

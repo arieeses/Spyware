@@ -47,7 +47,16 @@ def sync_v2board(store: Store, cfg: dict, panel: str = None):
 
 
 def run_source(store: Store, src) -> Tuple[bool, str]:
-    """执行一个数据源, 返回 (是否成功, 消息)。异常不抛出, 转成消息。"""
+    """执行一个数据源并记入运行日志。返回 (是否成功, 消息)。"""
+    ok, msg = _run_source(store, src)
+    try:
+        store.add_runlog(src["type"], src["name"], ok, msg)
+    except Exception:  # noqa: BLE001
+        pass
+    return ok, msg
+
+
+def _run_source(store: Store, src) -> Tuple[bool, str]:
     cfg = json.loads(src["config"] or "{}")
     try:
         if src["type"] == "logfile":

@@ -67,8 +67,10 @@ class V2BoardConnector:
                         traffic_bytes=int(row.get("traffic") or 0),
                         banned=int(row.get("banned") or 0),
                         panel=panel,
+                        commit=False,   # 批量, 结束统一提交(大幅提速)
                     )
                     n += 1
+            store.commit()
         finally:
             conn.close()
         return n
@@ -107,14 +109,17 @@ class V2BoardConnector:
                         continue
                     for r in rows:
                         proto = (r.get("protocol") or suffix) if "protocol" in cols else suffix
-                        protos.add(proto)
-                        total += 1
+                        shown = int(r.get("show") or 0)
                         is_relay = r.get("parent_id") is not None
-                        relay += 1 if is_relay else 0
+                        # 协议列表只统计"可见节点"(show=1, 即订阅里真正下发的)
+                        if shown:
+                            protos.add(proto)
+                            total += 1
+                            relay += 1 if is_relay else 0
                         nodes.append({
                             "proto": proto, "table": suffix, "id": r.get("id"),
                             "name": r.get("name"), "relay": is_relay,
-                            "show": int(r.get("show") or 0), "host": r.get("host"),
+                            "show": shown, "host": r.get("host"),
                             "group_id": r.get("group_id"),
                         })
         finally:
