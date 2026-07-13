@@ -205,6 +205,11 @@ RISK_COLS = [("uid", "用户ID"), ("email", "邮箱"), ("panel", "机场"), ("to
              ("ips", "IP数"), ("pull", "拉取"), ("score", "风险分"), ("level", "风险等级"),
              ("tags", "风险标签"), ("created", "注册时间"), ("expired", "到期时间"), ("last", "最后活跃")]
 _NUM_COLS = {"uid", "ips", "pull", "score"}
+_DASH = '<span class="dim">—</span>'
+
+
+def _th_attr(k: str) -> str:
+    return ' data-t="num"' if k in _NUM_COLS else ''
 
 
 def _mask(s: str) -> str:
@@ -1086,7 +1091,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
                       f'<div class="scorebar"><div class="fill" style="width:{min(100, int(r.score))}%;background:{color}"></div></div>'
                       f'<span class="scoreval">{r.score}</span></td>'),
             "level": f'<td><span class="badge" style="background:{color};color:{LEVEL_FG.get(r.level, "#fff")}">{LEVEL_TEXT.get(r.level, r.level)}</span></td>',
-            "tags": f'<td class="rtags">{tags_html or "<span class=\'dim\'>—</span>"}</td>',
+            "tags": f'<td class="rtags">{tags_html or _DASH}</td>',
             "created": f'<td class="small dim">{reg}</td>',
             "expired": f'<td class="small" style="{"color:#e5484d" if expired else "color:#8a8a8a"}">{exp}</td>',
             "last": f'<td class="small dim">{_humanize(r.last_pull)}</td>',
@@ -1095,8 +1100,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     if not rows:
         rows = f'<tr><td colspan="{len(vis)}" class="dim" style="padding:20px">暂无用户</td></tr>'
 
-    header = "".join(
-        f'<th{" data-t=\"num\"" if k in _NUM_COLS else ""}>{lb}</th>' for k, lb in vis)
+    header = "".join(f"<th{_th_attr(k)}>{lb}</th>" for k, lb in vis)
 
     # 列显隐弹窗
     col_checks = "".join(
