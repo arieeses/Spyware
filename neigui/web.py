@@ -357,7 +357,7 @@ def render_dashboard(store: Store) -> str:
     </div>"""
 
 
-def render_source_page(store: Store, kind: str) -> str:
+def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") -> str:
     """kind = 'v2board' | 'logfile'"""
     verb = "同步" if kind == "v2board" else "导入"
     rows = ""
@@ -469,7 +469,7 @@ def render_source_page(store: Store, kind: str) -> str:
           </div>
         </div>"""
 
-    return f"""
+    return f"""{_card_alert(msg, err)}
     <div class="card">
       <div class="card-title">{title}
         <form method="post" action="{run_action}" style="margin-left:auto"><button class="btn">{run_label}</button></form>
@@ -1361,9 +1361,9 @@ class Handler(BaseHTTPRequestHandler):
             if active == "dashboard":
                 content = render_dashboard(store)
             elif active == "v2board":
-                content = render_source_page(store, "v2board")
+                content = render_source_page(store, "v2board", q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "log":
-                content = render_source_page(store, "logfile")
+                content = render_source_page(store, "logfile", q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "risk":
                 content = render_risklist(store, q.get("level", ["all"])[0], q.get("panel", ["all"])[0])
             elif active == "rules":
@@ -1502,11 +1502,16 @@ class Handler(BaseHTTPRequestHandler):
                 store.toggle_source(int(form["id"])); self._back(); return
             if path == "/sources/run":
                 src = store.get_source(int(form["id"]))
-                if src:
-                    ok, msg = run_source(store, src)
-                    store.set_kv("last_run_summary", f"{'✓' if ok else '✗'} [{src['name']}] {msg}")
-                    store.set_kv("last_run_ts", datetime.now().isoformat(timespec="seconds"))
-                self._back(); return
+                if not src:
+                    self._back(); return
+                ok, msg = run_source(store, src)
+                store.set_kv("last_run_summary", f"{'✓' if ok else '✗'} [{src['name']}] {msg}")
+                store.set_kv("last_run_ts", datetime.now().isoformat(timespec="seconds"))
+                # 结果直接回显在当前页
+                page = "/panels/v2board" if src["type"] == "v2board" else "/panels/log"
+                param = "msg" if ok else "err"
+                self._to(f"{page}?{param}=" + quote(f"[{src['name']}] {msg}"))
+                return
             if path == "/run/all":
                 run_all(store); self._back(); return
             if path == "/auto/mode":
