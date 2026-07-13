@@ -384,17 +384,27 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
             status = '<span class="on">● 在线</span>' if online else '<span class="off">○ 离线</span>'
             metstr = (f'CPU {met.get("cpu","-")}% 内存 {met.get("mem","-")}% 磁盘 {met.get("disk","-")}%'
                       if met else "尚无数据")
-            lp = scfg.get("log_path", "")
+            lp = scfg.get("log_path", "") or "默认 /www/wwwlogs/neigui_sub.log"
             detail_cell = (
                 f'<div>探针 · {status} <span class="dim small">{metstr}</span></div>'
-                f'<form method="post" action="/agent/logpath" class="inlineform" style="margin:5px 0 0">'
-                f'<input type="hidden" name="id" value="{s["id"]}">'
-                f'<input name="log_path" value="{esc(lp)}" placeholder="日志路径(留空用默认 /www/wwwlogs/neigui_sub.log)" style="width:280px">'
-                f'<button class="btn sm ghost">下发路径</button></form>'
-                f'<button class="btn sm ghost" type="button" style="margin-top:5px" '
+                f'<div class="dim small">日志: {esc(lp)}</div>'
+                f'<button class="btn sm ghost" type="button" style="margin-top:4px" '
                 f'onclick="cpAgent(\'{esc(tok)}\')">复制安装命令</button>')
-        else:
+            edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
+                         f'data-mode="agent" data-path="{esc(scfg.get("log_path",""))}"')
+            edit_fn = "editLog"
+        elif kind == "logfile":
             detail_cell = _source_detail(s)
+            edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
+                         f'data-mode="file" data-path="{esc(scfg.get("path",""))}"')
+            edit_fn = "editLog"
+        else:  # v2board
+            detail_cell = _source_detail(s)
+            edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
+                         f'data-host="{esc(scfg.get("host",""))}" data-port="{esc(scfg.get("port","3306"))}" '
+                         f'data-user="{esc(scfg.get("user",""))}" data-db="{esc(scfg.get("database",""))}" '
+                         f'data-prefix="{esc(scfg.get("prefix","v2_"))}"')
+            edit_fn = "editV2b"
         rows += f"""
         <tr>
           <td>{esc(s['name'])}</td>
@@ -416,71 +426,40 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
           </td>
           <td class="actions">
             <form method="post" action="/sources/run"><input type="hidden" name="id" value="{s['id']}"><button class="btn sm">{verb}</button></form>
+            <button class="btn sm ghost" type="button" onclick="{edit_fn}(this)" {edit_attr}>编辑</button>
             <form method="post" action="/sources/delete" onsubmit="return confirm('删除?')"><input type="hidden" name="id" value="{s['id']}"><button class="btn sm danger">删除</button></form>
           </td>
         </tr>"""
     if not rows:
-        rows = '<tr><td colspan="5" class="dim" style="padding:16px">暂无, 用下方表单添加</td></tr>'
-
-    run_action = "/run/all"
-    run_label = "▶ 同步全部" if kind == "v2board" else "▶ 导入全部"
+        rows = '<tr><td colspan="5" class="dim" style="padding:16px">暂无, 点右上「＋ 添加」</td></tr>'
 
     if kind == "v2board":
-        title = "v2board 面板"
-        add_form = f"""
-        <form method="post" action="/sources/add" class="addbox">
-          <input type="hidden" name="type" value="v2board">
-          <div class="ab-title">＋ 添加 v2board 面板(MySQL 只读账号)</div>
-          <input name="name" placeholder="机场名称, 如: 机场A" required>
-          <div class="row2"><input name="host" placeholder="host" value="127.0.0.1" required>
-            <input name="port" placeholder="port" value="3306" style="max-width:90px"></div>
-          <div class="row2"><input name="user" placeholder="只读用户" required>
-            <input name="password" type="password" placeholder="密码"></div>
-          <div class="row2"><input name="database" placeholder="库名, 如 v2board" required>
-            <input name="prefix" placeholder="表前缀" value="v2_" style="max-width:110px"></div>
-          <button class="btn">添加面板</button>
-        </form>"""
+        title, run_label, add_id = "v2board 面板", "▶ 同步全部", "addV2b"
         hint = "读 v2_user 的 token/注册时间/流量/分组, 补全用户画像。建议单独建只读账号。"
+        modals = _v2b_modals()
+        extra = ""
     else:
-        title = "1Panel / aaPanel 日志"
-        add_form = """
-        <form method="post" action="/sources/add" class="addbox">
-          <input type="hidden" name="type" value="logfile">
-          <input type="hidden" name="mode" value="agent">
-          <div class="ab-title">＋ 探针接入(主控/被控, 日志+VPS负载, 推荐)</div>
-          <div class="dim small">添加后复制一键安装命令, 在面板服务器跑一行装好; 上报间隔跟随下方设置。</div>
-          <input name="name" placeholder="名称, 如: 机场A" required>
-          <button class="btn">添加探针源</button>
-        </form>
-        <form method="post" action="/sources/add" class="addbox">
-          <input type="hidden" name="type" value="logfile">
-          <input type="hidden" name="mode" value="file">
-          <div class="ab-title">＋ 本地文件(中央与面板同机时)</div>
-          <input name="name" placeholder="名称" required>
-          <input name="path" placeholder="日志路径, 如 /www/wwwlogs/neigui_sub.log" required>
-          <button class="btn">添加本地源</button>
-        </form>"""
-        hint = ("面板里给订阅路由配 neigui 日志格式 + real_ip。远程面板用<b>探针接入</b>"
-                "(一键安装, 自动上报日志+负载); 中央与面板同机可用本地文件。")
-
-    extra = ""
-    if kind == "logfile":
+        title, run_label, add_id = "1Panel / aaPanel 日志", "▶ 导入全部", "addLog"
+        hint = ("远程面板用<b>探针接入</b>(一键安装, 自动上报日志+负载); 中央与面板同机可用本地文件。"
+                "日志路径与上报间隔都可在每行「编辑」里改。")
+        modals = _log_modals()
         extra = """
         <div class="card">
           <div class="card-title">远程面板如何接入(探针)</div>
           <div class="dim small" style="line-height:1.9">
-            用上表「探针接入」添加一个源, 点其「复制一键安装命令」, 在<b>面板服务器</b>上执行:
+            右上「＋ 添加」→ 探针接入, 添加后点该行「复制安装命令」在<b>面板服务器</b>执行:
             <pre class="filebox">curl -fsSL "http://&lt;中央地址&gt;/agent/install.sh?token=&lt;token&gt;" | bash</pre>
-            (默认日志路径 <code>/www/wwwlogs/neigui_sub.log</code>, 需改则在命令前加 <code>LOG=/你的路径</code>。)
-            装好后被控 agent 自动: 本地增量读订阅日志 + 采集本机 VPS 负载, 按中央设置的同步间隔上报;
-            在线状态和负载显示在上表「目标」列。中央需对面板服务器 HTTP 可达, 生产建议加反代/防火墙限源。
+            装好后被控 agent 自动上报日志+VPS负载; <b>日志路径、上报间隔在该行「编辑」/「同步方式」里设置</b>, 无需改命令。
           </div>
         </div>"""
 
     return f"""{_card_alert(msg, err)}
     <div class="card">
       <div class="card-title">{title}
-        <form method="post" action="{run_action}" style="margin-left:auto"><button class="btn">{run_label}</button></form>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn" type="button" onclick="openM('{add_id}')">＋ 添加</button>
+          <form method="post" action="/run/all"><button class="btn ghost">{run_label}</button></form>
+        </div>
       </div>
       <div class="dim small" style="margin-bottom:10px">{hint}</div>
       <div class="tablewrap">
@@ -488,8 +467,62 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
         <thead><tr><th>名称</th><th>目标</th><th>状态</th><th>同步方式</th><th>操作</th></tr></thead>
         <tbody>{rows}</tbody>
       </table></div>
-      <div class="addforms">{add_form}</div>
-    </div>{extra}"""
+    </div>{extra}{modals}"""
+
+
+def _log_modals() -> str:
+    return """
+    <div class="modal-bg" id="addLog"><div class="modal">
+      <h3>添加日志源</h3>
+      <div class="segbar" style="margin:10px 0">
+        <button type="button" id="lm_a" class="seg active" onclick="logMode('agent')">探针接入</button>
+        <button type="button" id="lm_f" class="seg" onclick="logMode('file')">本地文件</button>
+      </div>
+      <form method="post" action="/sources/add">
+        <input type="hidden" name="type" value="logfile">
+        <input type="hidden" name="mode" id="logMode" value="agent">
+        <div class="mfield"><input name="name" placeholder="名称, 如: 机场A" required></div>
+        <div class="mfield" id="lf_agenttip"><div class="dim small">探针: 添加后点该行「复制安装命令」在面板服务器执行; 日志路径/间隔装好后在该行编辑。</div></div>
+        <div class="mfield" id="lf_path" style="display:none"><input name="path" id="lf_path_i" placeholder="日志路径, 如 /www/wwwlogs/neigui_sub.log"></div>
+        <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('addLog')">取消</button><button class="btn">添加</button></div>
+      </form>
+    </div></div>
+    <div class="modal-bg" id="editLog"><div class="modal">
+      <h3>编辑日志源</h3>
+      <form method="post" action="/sources/edit">
+        <input type="hidden" name="id" id="el_id">
+        <div class="mfield"><label class="dim small">名称</label><input name="name" id="el_name"></div>
+        <div class="mfield"><label class="dim small" id="el_lbl">日志路径</label>
+          <input name="path" id="el_path" placeholder="/www/wwwlogs/neigui_sub.log"></div>
+        <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('editLog')">取消</button><button class="btn">保存</button></div>
+      </form>
+    </div></div>"""
+
+
+def _v2b_modals() -> str:
+    return """
+    <div class="modal-bg" id="addV2b"><div class="modal">
+      <h3>添加 v2board 面板</h3>
+      <form method="post" action="/sources/add">
+        <input type="hidden" name="type" value="v2board">
+        <div class="mfield"><input name="name" placeholder="机场名称, 如: 机场A" required></div>
+        <div class="mfield row2"><input name="host" placeholder="host" value="127.0.0.1" required><input name="port" placeholder="port" value="3306" style="max-width:90px"></div>
+        <div class="mfield row2"><input name="user" placeholder="只读用户" required><input name="password" type="password" placeholder="密码"></div>
+        <div class="mfield row2"><input name="database" placeholder="库名" required><input name="prefix" value="v2_" style="max-width:110px"></div>
+        <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('addV2b')">取消</button><button class="btn">添加</button></div>
+      </form>
+    </div></div>
+    <div class="modal-bg" id="editV2b"><div class="modal">
+      <h3>编辑 v2board 面板</h3>
+      <form method="post" action="/sources/edit">
+        <input type="hidden" name="id" id="ev_id">
+        <div class="mfield"><label class="dim small">机场名称</label><input name="name" id="ev_name"></div>
+        <div class="mfield row2"><input name="host" id="ev_host" placeholder="host"><input name="port" id="ev_port" placeholder="port" style="max-width:90px"></div>
+        <div class="mfield row2"><input name="user" id="ev_user" placeholder="用户"><input name="password" id="ev_pass" type="password" placeholder="密码(留空不改)"></div>
+        <div class="mfield row2"><input name="database" id="ev_db" placeholder="库名"><input name="prefix" id="ev_prefix" placeholder="前缀" style="max-width:110px"></div>
+        <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('editV2b')">取消</button><button class="btn">保存</button></div>
+      </form>
+    </div></div>"""
 
 
 def render_runlog(store: Store) -> str:
@@ -1172,6 +1205,15 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .segbar {{ display:inline-flex; border:1px solid #d5dae1; border-radius:7px; overflow:hidden; }}
   .seg {{ border:0; background:#fff; color:#444444; padding:8px 20px; font-size:14px; cursor:pointer; }}
   .seg.active {{ background:var(--pri); color:#fff; }}
+  .modal-bg {{ position:fixed; inset:0; background:rgba(0,0,0,.4); display:none; z-index:100; }}
+  .modal-bg.open {{ display:flex; align-items:flex-start; justify-content:center; padding-top:8vh; }}
+  .modal {{ background:var(--card); border-radius:12px; padding:20px 22px; width:min(460px,92vw); max-height:82vh; overflow:auto; box-shadow:0 12px 44px rgba(0,0,0,.22); }}
+  .modal h3 {{ margin:0 0 6px; font-size:16px; }}
+  .modal .mfield {{ margin-top:12px; }}
+  .modal .mfield label {{ display:block; margin-bottom:4px; }}
+  .modal input {{ width:100%; padding:8px 10px; border:1px solid #d5dae1; border-radius:7px; font-size:13px; }}
+  .modal .row2 {{ display:flex; gap:8px; }}
+  .modal-actions {{ display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }}
   .switch {{ position:relative; display:inline-block; width:38px; height:20px; vertical-align:middle; }}
   .switch input {{ opacity:0; width:0; height:0; }}
   .switch .track {{ position:absolute; inset:0; background:#cfd4da; border-radius:20px; transition:.15s; cursor:pointer; }}
@@ -1238,6 +1280,30 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     {content}
   </div>
 <script>
+  function openM(id){{document.getElementById(id).classList.add('open');}}
+  function closeM(id){{document.getElementById(id).classList.remove('open');}}
+  function logMode(m){{
+    document.getElementById('logMode').value=m;
+    document.getElementById('lm_a').classList.toggle('active',m=='agent');
+    document.getElementById('lm_f').classList.toggle('active',m=='file');
+    document.getElementById('lf_path').style.display=(m=='file')?'block':'none';
+    document.getElementById('lf_path_i').required=(m=='file');
+    document.getElementById('lf_agenttip').style.display=(m=='agent')?'block':'none';
+  }}
+  function editLog(b){{
+    document.getElementById('el_id').value=b.dataset.id;
+    document.getElementById('el_name').value=b.dataset.name;
+    document.getElementById('el_path').value=b.dataset.path||'';
+    document.getElementById('el_lbl').textContent=(b.dataset.mode=='agent')?'探针日志路径(下发给探针, 留空用默认)':'本地日志路径';
+    openM('editLog');
+  }}
+  function editV2b(b){{
+    ['id','name','host','port','user','db','prefix'].forEach(function(k){{
+      var el=document.getElementById('ev_'+k); if(el) el.value=b.dataset[k]||'';
+    }});
+    document.getElementById('ev_pass').value='';
+    openM('editV2b');
+  }}
   function cpAgent(t){{
     var c='curl -fsSL "'+location.origin+'/agent/install.sh?token='+t+'" | bash';
     if(navigator.clipboard) navigator.clipboard.writeText(c);
@@ -1558,6 +1624,27 @@ class Handler(BaseHTTPRequestHandler):
                            "user": form.get("user", ""), "password": form.get("password", ""),
                            "database": form.get("database", ""), "prefix": form.get("prefix", "v2_")}
                 store.add_source(t, name, json.dumps(cfg))
+                self._back(); return
+            if path == "/sources/edit":
+                src = store.get_source(int(form["id"]))
+                if src:
+                    cfg = json.loads(src["config"] or "{}")
+                    name = form.get("name", "").strip() or src["name"]
+                    if src["type"] == "v2board":
+                        cfg["host"] = form.get("host", "127.0.0.1")
+                        cfg["port"] = form.get("port", "3306")
+                        cfg["user"] = form.get("user", "")
+                        cfg["database"] = form.get("database", "")
+                        cfg["prefix"] = form.get("prefix", "v2_")
+                        if form.get("password", ""):
+                            cfg["password"] = form["password"]
+                    else:
+                        p = form.get("path", "").strip()
+                        if cfg.get("mode") == "agent":
+                            cfg["log_path"] = p
+                        else:
+                            cfg["path"] = p
+                    store.update_source(src["id"], name, json.dumps(cfg))
                 self._back(); return
             if path == "/sources/delete":
                 store.delete_source(int(form["id"])); self._back(); return

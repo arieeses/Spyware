@@ -170,6 +170,10 @@ class Store:
         self.conn.execute("UPDATE sources SET config=? WHERE id=?", (config, sid))
         self.conn.commit()
 
+    def update_source(self, sid: int, name: str, config: str) -> None:
+        self.conn.execute("UPDATE sources SET name=?, config=? WHERE id=?", (name, config, sid))
+        self.conn.commit()
+
     def get_ingest_state(self, path: str):
         return self.conn.execute(
             "SELECT offset, inode FROM ingest_state WHERE path=?", (path,)
