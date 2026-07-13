@@ -15,9 +15,14 @@ import urllib.request
 _cpu_prev = {}
 
 
+# 用普通 UA, 否则 aaPanel/宝塔 等 WAF 会拦截默认的 Python-urllib(403)
+_UA = "Mozilla/5.0 (compatible; ng-agent/1.0)"
+
+
 def http_get(url, timeout=10):
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        req = urllib.request.Request(url, headers={"User-Agent": _UA})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8", "replace"))
     except Exception:
         return None
@@ -27,7 +32,7 @@ def http_post(url, obj, timeout=15):
     try:
         req = urllib.request.Request(
             url, data=json.dumps(obj).encode(),
-            headers={"Content-Type": "application/json"})
+            headers={"Content-Type": "application/json", "User-Agent": _UA})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return 200 <= r.status < 300
     except Exception:
