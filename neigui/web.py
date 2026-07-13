@@ -169,6 +169,44 @@ def _source_detail(src) -> str:
     return esc(src["config"])
 
 
+def _paginate(size, page, total, default):
+    """返回 (每页数, 当前页, 总页数, 是否全部)。"""
+    if str(size) == "all":
+        return (total or 1), 1, 1, True
+    psize = int(size) if str(size).isdigit() else default
+    pages = max(1, (total + psize - 1) // psize)
+    pg = min(max(1, int(page) if str(page).isdigit() else 1), pages)
+    return psize, pg, pages, False
+
+
+def _pager_html(path, base, size, page, pages, sizes):
+    """Element 风格分页: ‹ 1 2 … N › + 每页下拉。base=要保留的查询参数 dict。"""
+    def purl(p, sz=None):
+        q = dict(base); q["page"] = p; q["size"] = sz if sz is not None else size
+        return path + "?" + "&".join(f"{k}={quote(str(v))}" for k, v in q.items())
+    nums, prevd, show = [], None, {1, pages}
+    for p in range(page - 2, page + 3):
+        if 1 <= p <= pages:
+            show.add(p)
+    for p in sorted(show):
+        if prevd is not None and p - prevd > 1:
+            nums.append('<span class="pg dot">…</span>')
+        nums.append(f'<a class="{"pg cur" if p==page else "pg"}" href="{purl(p)}">{p}</a>')
+        prevd = p
+    prev = f'<a class="pg" href="{purl(page-1)}">‹</a>' if page > 1 else '<span class="pg dis">‹</span>'
+    nxt = f'<a class="pg" href="{purl(page+1)}">›</a>' if page < pages else '<span class="pg dis">›</span>'
+    opts = "".join(f'<option value="{purl(1, s)}" {"selected" if str(size)==str(s) else ""}>'
+                   f'{"全部" if s=="all" else str(s)+" 条/页"}</option>' for s in sizes)
+    sel = f'<select class="pg-sel" onchange="location.href=this.value">{opts}</select>'
+    return f'<div class="pager">{prev}{"".join(nums)}{nxt}{sel}</div>'
+
+
+RISK_COLS = [("uid", "用户ID"), ("email", "邮箱"), ("panel", "机场"), ("token", "Token"),
+             ("ips", "IP数"), ("pull", "拉取"), ("score", "风险分"), ("level", "风险等级"),
+             ("tags", "风险标签"), ("created", "注册时间"), ("expired", "到期时间"), ("last", "最后活跃")]
+_NUM_COLS = {"uid", "ips", "pull", "score"}
+
+
 def _mask(s: str) -> str:
     """打码: 只显示首尾, 中间星号。用于二次编辑时不明文回显库名/IP。"""
     s = str(s or "")
@@ -413,9 +451,9 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
             metstr = (f'<span class="dim small">CPU {met.get("cpu","-")}% 内存 {met.get("mem","-")}% 磁盘 {met.get("disk","-")}%</span>'
                       if met and online else '')
             detail_cell = (
-                f'<div>探针 · {dot} {metstr}</div>'
-                f'<button class="btn sm ghost" type="button" style="margin-top:4px" '
-                f'onclick="cpAgent(\'{esc(tok)}\')">复制安装命令</button>')
+                f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">探针 · {dot}'
+                f'<button class="btn sm ghost" type="button" onclick="cpAgent(\'{esc(tok)}\')">复制安装命令</button></div>'
+                f'{("<div>" + metstr + "</div>") if metstr else ""}')
             edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
                          f'data-mode="agent" data-path="{esc(scfg.get("log_path",""))}" '
                          f'data-sync="{smode}" data-interval="{iv}"')
@@ -427,7 +465,14 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
                          f'data-sync="{smode}" data-interval="{iv}"')
             edit_fn = "editLog"
         else:  # v2board
-            detail_cell = _source_detail(s)
+            # 状态图标(不显示数据库连接明细)
+            seen = float(store.get_kv(f"src_seen::{s['id']}", "0") or 0)
+            if seen == 0:
+                detail_cell = '<span class="dim">● 未同步</span>'
+            elif store.get_kv(f"src_ok::{s['id']}", "1") == "1":
+                detail_cell = '<span style="color:#3ab76a">● 正常</span>'
+            else:
+                detail_cell = '<span style="color:#e5484d">● 同步异常</span>'
             cm = scfg.get("cols", {})
             edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
                          f'data-host="{esc(_mask(scfg.get("host","")))}" data-port="{esc(scfg.get("port","3306"))}" '
@@ -592,30 +637,44 @@ def _v2b_modals() -> str:
     </div></div>"""
 
 
-def render_runlog(store: Store, kind: str = "", name: str = "") -> str:
+def render_runlog(store: Store, kind: str = "", name: str = "", size: str = "10", page: str = "1") -> str:
+    logs = store.list_runlog(500, kind or None, name or None)
+    total = len(logs)
+    psize, pg, pages, all_mode = _paginate(size, page, total, 10)
+    page_logs = logs if all_mode else logs[(pg - 1) * psize: pg * psize]
+
     rows = ""
-    for r in store.list_runlog(200, kind or None, name or None):
-        ok = r["ok"]
-        icon = '<span class="on">✓</span>' if ok else '<span style="color:#e5484d">✗</span>'
+    for r in page_logs:
+        icon = '<span class="on">✓</span>' if r["ok"] else '<span style="color:#e5484d">✗</span>'
         rows += (f'<tr><td class="small dim">{esc(r["ts"])}</td>'
                  f'<td>{icon}</td><td>{esc(r["kind"])}</td>'
                  f'<td>{esc(r["name"])}</td><td class="small">{esc(r["msg"])}</td></tr>')
     if not rows:
         rows = '<tr><td colspan="5" class="dim" style="padding:16px">暂无运行记录</td></tr>'
-    if name:
-        scope = f'· 数据源「{esc(name)}」'
-    elif kind:
-        scope = "· " + {"v2board": "v2board 面板", "logfile": "日志接入"}.get(kind, kind)
-    else:
-        scope = ""
-    back = '<a class="btn sm ghost" href="/runlog" style="margin-left:8px">全部日志</a>' if (kind or name) else ''
+
+    # 按已添加数据源分类
+    src_names = [s["name"] for s in store.list_sources()]
+    tabs = f'<a class="tab {"active" if not name else ""}" href="/runlog?size={quote(size)}">全部</a>'
+    for sn in src_names:
+        tabs += f'<a class="tab {"active" if name==sn else ""}" href="/runlog?name={quote(sn)}&size={quote(size)}">{esc(sn)}</a>'
+
+    pager = _pager_html("/runlog", {k: v for k, v in (("kind", kind), ("name", name)) if v},
+                        size if str(size) in ("10", "20", "50", "100", "200") else "10",
+                        pg, pages, ["10", "20", "50", "100", "200"])
+    clear = (f'<form method="post" action="/runlog/clear" style="margin-left:auto" '
+             f'onsubmit="return confirm(\'清除{"该源" if name else ""}运行日志?\')">'
+             f'<input type="hidden" name="kind" value="{esc(kind)}">'
+             f'<input type="hidden" name="name" value="{esc(name)}">'
+             f'<button class="btn sm danger">清除日志</button></form>')
     return f"""
     <div class="card">
-      <div class="card-title">运行日志 <span class="dim small" style="font-weight:400;margin-left:8px">{scope} 最近 200 条</span>{back}</div>
+      <div class="card-title">运行日志 <span class="dim small" style="font-weight:400;margin-left:8px">共 {total} 条</span>{clear}</div>
+      <div class="tabs">{tabs}</div>
       <div class="tablewrap"><table class="grid">
         <thead><tr><th>时间</th><th>结果</th><th>类型</th><th>名称</th><th>消息</th></tr></thead>
         <tbody>{rows}</tbody>
       </table></div>
+      {pager}
     </div>"""
 
 
@@ -989,23 +1048,24 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
             continue
         filtered.append(r)
 
-    # 分页
+    # 分页(每页 10/50/100/150, 默认 10)
     total = len(filtered)
-    all_mode = (size == "all")
-    psize = total if all_mode else max(1, int(size) if str(size).isdigit() else 30)
-    pages = max(1, (total + psize - 1) // psize) if not all_mode else 1
-    pg = min(max(1, int(page) if str(page).isdigit() else 1), pages)
+    psize, pg, pages, all_mode = _paginate(size, page, total, 10)
     page_rows = filtered if all_mode else filtered[(pg - 1) * psize: pg * psize]
+
+    # 列显隐配置
+    try:
+        hidden = set(json.loads(store.get_kv("risk_hidden_cols", "[]") or "[]"))
+    except (ValueError, TypeError):
+        hidden = set()
+    vis = [(k, lb) for k, lb in RISK_COLS if k not in hidden]
 
     now = datetime.now(timezone.utc)
     rows = ""
     for r in page_rows:
         color = LEVEL_COLOR.get(r.level, "#8b8f98")
-        uid = esc(r.user_id if r.user_id is not None else "-")
         expired = r.expired_at is not None and r.expired_at < now
-        tags = list(r.tags)
-        if expired:
-            tags = ["已到期"] + tags
+        tags = (["已到期"] + list(r.tags)) if expired else list(r.tags)
         tags_html = "".join(
             f'<span class="rtag" style="background:{TAG_COLOR.get(t, "#8b8f98")}22;'
             f'color:{TAG_COLOR.get(t, "#8b8f98")}">{esc(t)}</span>' for t in tags)
@@ -1015,73 +1075,72 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         reg = r.created_at.strftime("%Y-%m-%d") if r.created_at else "-"
         exp = ("永久" if r.expired_at is None and r.created_at else
                (r.expired_at.strftime("%Y-%m-%d") if r.expired_at else "-"))
-        rows += f"""
-        <tr title="{esc(detail)}">
-          <td class="mono small">{uid}</td>
-          <td class="small">{esc(r.email or '-')}</td>
-          <td class="small">{esc(r.panel or '-')}</td>
-          <td class="mono small dim">{esc(r.token[:12])}</td>
-          <td class="num">{r.distinct_ips}</td>
-          <td class="num">{r.pull_count}</td>
-          <td class="num" data-sort="{r.score}">
-            <div class="scorebar"><div class="fill" style="width:{min(100, int(r.score))}%;background:{color}"></div></div>
-            <span class="scoreval">{r.score}</span></td>
-          <td><span class="badge" style="background:{color};color:{LEVEL_FG.get(r.level, '#fff')}">{LEVEL_TEXT.get(r.level, r.level)}</span></td>
-          <td class="rtags">{tags_html or '<span class="dim">—</span>'}</td>
-          <td class="small dim">{reg}</td>
-          <td class="small {'' if not expired else 'dim'}" style="{'color:#e5484d' if expired else ''}">{exp}</td>
-          <td class="small dim">{_humanize(r.last_pull)}</td>
-        </tr>"""
+        cell = {
+            "uid": f'<td class="mono small">{esc(r.user_id if r.user_id is not None else "-")}</td>',
+            "email": f'<td class="small">{esc(r.email or "-")}</td>',
+            "panel": f'<td class="small">{esc(r.panel or "-")}</td>',
+            "token": f'<td class="mono small dim">{esc(r.token[:12])}</td>',
+            "ips": f'<td class="num">{r.distinct_ips}</td>',
+            "pull": f'<td class="num">{r.pull_count}</td>',
+            "score": (f'<td class="num" data-sort="{r.score}">'
+                      f'<div class="scorebar"><div class="fill" style="width:{min(100, int(r.score))}%;background:{color}"></div></div>'
+                      f'<span class="scoreval">{r.score}</span></td>'),
+            "level": f'<td><span class="badge" style="background:{color};color:{LEVEL_FG.get(r.level, "#fff")}">{LEVEL_TEXT.get(r.level, r.level)}</span></td>',
+            "tags": f'<td class="rtags">{tags_html or "<span class=\'dim\'>—</span>"}</td>',
+            "created": f'<td class="small dim">{reg}</td>',
+            "expired": f'<td class="small" style="{"color:#e5484d" if expired else "color:#8a8a8a"}">{exp}</td>',
+            "last": f'<td class="small dim">{_humanize(r.last_pull)}</td>',
+        }
+        rows += f'<tr title="{esc(detail)}">' + "".join(cell[k] for k, _ in vis) + "</tr>"
     if not rows:
-        rows = '<tr><td colspan="12" class="dim" style="padding:20px">暂无用户</td></tr>'
+        rows = f'<tr><td colspan="{len(vis)}" class="dim" style="padding:20px">暂无用户</td></tr>'
 
-    # 搜索框
+    header = "".join(
+        f'<th{" data-t=\"num\"" if k in _NUM_COLS else ""}>{lb}</th>' for k, lb in vis)
+
+    # 列显隐弹窗
+    col_checks = "".join(
+        f'<label><input type="checkbox" name="col" value="{k}" {"checked" if k not in hidden else ""}> {lb}</label>'
+        for k, lb in RISK_COLS)
+    col_modal = f"""
+    <div class="modal-bg" id="colModal"><div class="modal">
+      <h3>显示列</h3><div class="dim small">勾选要显示的列</div>
+      <form method="post" action="/risk/cols">
+        <div class="collist">{col_checks}</div>
+        <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('colModal')">取消</button><button class="btn">保存</button></div>
+      </form>
+    </div></div>"""
+
     searchbox = (
         f'<form method="get" action="/risk" style="margin-left:auto;display:flex;gap:6px">'
         f'<input type="hidden" name="level" value="{esc(flt or "all")}">'
         f'<input type="hidden" name="panel" value="{esc(panel_flt or "all")}">'
         f'<input type="hidden" name="size" value="{esc(size)}">'
-        f'<input name="q" value="{esc(search)}" placeholder="搜索 token / 邮箱 / IP" style="width:220px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
+        f'<input name="q" value="{esc(search)}" placeholder="搜索 token / 邮箱 / IP" style="width:200px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
         f'<button class="btn sm">搜索</button>'
         + (f'<a class="btn sm ghost" href="/risk?level={quote(flt or "all")}&panel={pf}">清除</a>' if search else '')
         + '</form>')
 
-    # 分页控件
-    def purl(sz, p):
-        return f"/risk?level={lf}&panel={pf}&q={quote(search)}&size={quote(str(sz))}&page={p}"
-    sizesel = "".join(
-        f'<a class="tab {"active" if str(size)==str(sz) else ""}" href="{purl(sz, 1)}">{"全部" if sz=="all" else sz}</a>'
-        for sz in ["15", "30", "60", "100", "200", "all"])
-    prevnext = ""
-    if not all_mode and pages > 1:
-        prev = f'<a class="btn sm ghost" href="{purl(size, pg-1)}">上一页</a>' if pg > 1 else ''
-        nxt = f'<a class="btn sm ghost" href="{purl(size, pg+1)}">下一页</a>' if pg < pages else ''
-        prevnext = f'<span class="dim small">第 {pg}/{pages} 页 · 共 {total} 条</span> {prev} {nxt}'
-    else:
-        prevnext = f'<span class="dim small">共 {total} 条</span>'
+    pager = _pager_html("/risk", {"level": flt or "all", "panel": panel_flt or "all", "q": search},
+                        size if str(size) in ("10", "50", "100", "150") else "10",
+                        pg, pages, ["10", "50", "100", "150"])
 
     return f"""
     <div class="card">
       <div class="card-title">用户风险管理
-        <span class="dim small" style="font-weight:400;margin-left:8px">点表头排序</span>
+        <button class="btn sm ghost" type="button" style="margin-left:8px" onclick="openM('colModal')">列 ▾</button>
         {searchbox}</div>
       <div class="chips">{chips}</div>
       <div class="tabs">{tabs}</div>
       {panel_bar}
-      <div class="tabs" style="align-items:center"><span class="dim small" style="margin-right:4px">每页:</span>{sizesel}
-        <span style="margin-left:auto;display:flex;gap:8px;align-items:center">{prevnext}</span></div>
       <div class="tablewrap">
       <table class="grid sortable" id="risk">
-        <thead><tr>
-          <th data-t="num">用户ID</th><th>邮箱</th><th>机场</th><th>Token</th>
-          <th data-t="num">IP数</th><th data-t="num">拉取</th>
-          <th data-t="num">风险分</th><th>风险等级</th>
-          <th>风险标签</th><th>注册时间</th><th>到期时间</th><th>最后活跃</th>
-        </tr></thead>
+        <thead><tr>{header}</tr></thead>
         <tbody>{rows}</tbody>
       </table></div>
-      <div class="dim small" style="margin-top:8px">机场归属来自 v2board 同步; 红色到期时间=已到期; 「已到期」标签自动标注。</div>
-    </div>"""
+      {pager}
+      <div class="dim small" style="margin-top:8px">机场归属来自 v2board 同步; 红色到期时间=已到期; 点表头排序; 「列 ▾」可选择显示哪些列。</div>
+    </div>{col_modal}"""
 
 
 # ————————————————— 登录/注册/找回 —————————————————
@@ -1323,6 +1382,14 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .modal input, .modal textarea {{ width:100%; padding:8px 10px; border:1px solid #d5dae1; border-radius:7px; font-size:13px; font-family:inherit; }}
   .modal .row2 {{ display:flex; gap:8px; }}
   .modal-actions {{ display:flex; gap:8px; justify-content:flex-end; margin-top:18px; }}
+  .modal .collist {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }}
+  .modal .collist label {{ display:flex; align-items:center; gap:6px; font-size:13px; margin:0; }}
+  .pager {{ display:flex; gap:4px; align-items:center; justify-content:flex-end; margin-top:14px; flex-wrap:wrap; }}
+  .pg {{ min-width:30px; height:30px; padding:0 8px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:6px; text-decoration:none; color:var(--txt); font-size:13px; }}
+  .pg:hover {{ border-color:var(--pri); }}
+  .pg.cur {{ background:var(--pri); color:#fff; border-color:var(--pri); }}
+  .pg.dis {{ color:#c8c8c8; }} .pg.dot {{ border:0; }}
+  .pg-sel {{ height:30px; border:1px solid var(--line); border-radius:6px; padding:0 6px; margin-left:8px; background:var(--card); color:var(--txt); }}
   .switch {{ position:relative; display:inline-block; width:38px; height:20px; vertical-align:middle; }}
   .switch input {{ opacity:0; width:0; height:0; }}
   .switch .track {{ position:absolute; inset:0; background:#cfd4da; border-radius:20px; transition:.15s; cursor:pointer; }}
@@ -1633,7 +1700,8 @@ class Handler(BaseHTTPRequestHandler):
             elif active == "settings":
                 content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "runlog":
-                content = render_runlog(store, q.get("kind", [""])[0], q.get("name", [""])[0])
+                content = render_runlog(store, q.get("kind", [""])[0], q.get("name", [""])[0],
+                                        q.get("size", ["10"])[0], q.get("page", ["1"])[0])
             else:
                 content = render_controls(store)
             self._html(layout(active, title, content, admin["username"] if admin else ""))
@@ -1684,7 +1752,8 @@ class Handler(BaseHTTPRequestHandler):
                 store.close()
             return
 
-        form = {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()}
+        formq = parse_qs(raw.decode("utf-8", "replace"))
+        form = {k: v[0] for k, v in formq.items()}
         try:
             # 公开: 认证相关
             if path == "/login":
@@ -1797,6 +1866,14 @@ class Handler(BaseHTTPRequestHandler):
                     store.update_source(src["id"], name, json.dumps(cfg))
                     store.set_source_auto(src["id"], 1 if smode != "manual" else 0, iv)
                 self._back(); return
+            if path == "/risk/cols":
+                checked = set(formq.get("col", []))
+                hidden = [k for k, _ in RISK_COLS if k not in checked]
+                store.set_kv("risk_hidden_cols", json.dumps(hidden))
+                self._to("/risk"); return
+            if path == "/runlog/clear":
+                store.clear_runlog(form.get("kind") or None, form.get("name") or None)
+                self._to("/runlog"); return
             if path == "/sources/delete":
                 store.delete_source(int(form["id"])); self._back(); return
             if path == "/sources/toggle":

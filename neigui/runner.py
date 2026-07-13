@@ -4,6 +4,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import time
 from datetime import datetime
 from typing import Tuple
 
@@ -72,6 +73,8 @@ def run_source(store: Store, src) -> Tuple[bool, str]:
     ok, msg = _run_source(store, src)
     try:
         store.add_runlog(src["type"], src["name"], ok, msg)
+        store.set_kv(f"src_ok::{src['id']}", "1" if ok else "0")
+        store.set_kv(f"src_seen::{src['id']}", str(time.time()))
     except Exception:  # noqa: BLE001
         pass
     return ok, msg

@@ -312,6 +312,16 @@ class Store:
         return self.conn.execute(
             f"SELECT * FROM runlog{w} ORDER BY id DESC LIMIT ?", params).fetchall()
 
+    def clear_runlog(self, kind: str = None, name: str = None) -> None:
+        where, params = [], []
+        if kind:
+            where.append("kind=?"); params.append(kind)
+        if name:
+            where.append("name=?"); params.append(name)
+        w = (" WHERE " + " AND ".join(where)) if where else ""
+        self.conn.execute(f"DELETE FROM runlog{w}", params)
+        self.conn.commit()
+
     # —— 清理演示/示例数据 ——
     def purge_demo(self) -> int:
         demo = ("tok_normal", "tok_insider1", "tok_spoof", "tok_newscout", "tok_selfsvc")
