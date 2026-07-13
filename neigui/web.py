@@ -510,8 +510,9 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
             metstr = (f'<span class="dim small">CPU {met.get("cpu","-")}% 内存 {met.get("mem","-")}% 磁盘 {met.get("disk","-")}%</span>'
                       if met and online else '')
             detail_cell = (
-                f'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">探针 · {dot}'
-                f'<button class="btn sm ghost" type="button" onclick="cpAgent(\'{esc(tok)}\')">复制安装命令</button></div>'
+                f'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">探针 · {dot}'
+                f'<button class="btn sm ghost" type="button" onclick="cpAgent(\'{esc(tok)}\')">复制安装命令</button>'
+                f'<button class="btn sm ghost" type="button" onclick="cpUninstall()">复制卸载命令</button></div>'
                 f'{("<div>" + metstr + "</div>") if metstr else ""}')
             edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
                          f'data-mode="agent" data-path="{esc(scfg.get("log_path",""))}" '
@@ -1608,6 +1609,11 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     var c='curl -fsSL "'+location.origin+'/agent/install.sh?token='+t+'" | bash';
     if(navigator.clipboard) navigator.clipboard.writeText(c);
     alert('一键安装命令已复制, 在面板服务器上执行:\\n\\n'+c+'\\n\\n装好后探针会自动连上; 日志路径和上报间隔都在本页该探针行里设置, 无需改命令。');
+  }}
+  function cpUninstall(){{
+    var c="systemctl disable --now neigui-agent 2>/dev/null; rm -f /etc/systemd/system/neigui-agent.service; systemctl daemon-reload; rm -rf /opt/neigui-agent; echo neigui-agent 已卸载";
+    if(navigator.clipboard) navigator.clipboard.writeText(c);
+    alert('卸载命令已复制, 在探针所在的面板服务器上执行:\\n\\n'+c+'\\n\\n然后在本页点该探针的「删除」移除数据源。');
   }}
 (function(){{
   var t=document.getElementById('risk'); if(!t) return;
