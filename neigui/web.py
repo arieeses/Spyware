@@ -451,6 +451,7 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
           <td class="actions">
             <form method="post" action="/sources/run"><input type="hidden" name="id" value="{s['id']}"><button class="btn sm">{verb}</button></form>
             <button class="btn sm ghost" type="button" onclick="{edit_fn}(this)" {edit_attr}>编辑</button>
+            <a class="btn sm ghost" href="/runlog?name={quote(s['name'])}">日志</a>
             <form method="post" action="/sources/delete" onsubmit="return confirm('删除?')"><input type="hidden" name="id" value="{s['id']}"><button class="btn sm danger">删除</button></form>
           </td>
         </tr>"""
@@ -483,6 +484,7 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
         <div style="margin-left:auto;display:flex;gap:8px">
           <button class="btn" type="button" onclick="openM('{add_id}')">＋ 添加</button>
           <form method="post" action="/run/all"><button class="btn ghost">{run_label}</button></form>
+          <a class="btn ghost" href="/runlog?kind={kind}">日志</a>
         </div>
       </div>
       <div class="dim small" style="margin-bottom:10px">{hint}</div>
@@ -590,9 +592,9 @@ def _v2b_modals() -> str:
     </div></div>"""
 
 
-def render_runlog(store: Store) -> str:
+def render_runlog(store: Store, kind: str = "", name: str = "") -> str:
     rows = ""
-    for r in store.list_runlog(200):
+    for r in store.list_runlog(200, kind or None, name or None):
         ok = r["ok"]
         icon = '<span class="on">✓</span>' if ok else '<span style="color:#e5484d">✗</span>'
         rows += (f'<tr><td class="small dim">{esc(r["ts"])}</td>'
@@ -600,9 +602,16 @@ def render_runlog(store: Store) -> str:
                  f'<td>{esc(r["name"])}</td><td class="small">{esc(r["msg"])}</td></tr>')
     if not rows:
         rows = '<tr><td colspan="5" class="dim" style="padding:16px">暂无运行记录</td></tr>'
+    if name:
+        scope = f'· 数据源「{esc(name)}」'
+    elif kind:
+        scope = "· " + {"v2board": "v2board 面板", "logfile": "日志接入"}.get(kind, kind)
+    else:
+        scope = ""
+    back = '<a class="btn sm ghost" href="/runlog" style="margin-left:8px">全部日志</a>' if (kind or name) else ''
     return f"""
     <div class="card">
-      <div class="card-title">运行日志 <span class="dim small" style="font-weight:400;margin-left:8px">最近 200 条(同步/导入/探针上报由调度触发的除外)</span></div>
+      <div class="card-title">运行日志 <span class="dim small" style="font-weight:400;margin-left:8px">{scope} 最近 200 条</span>{back}</div>
       <div class="tablewrap"><table class="grid">
         <thead><tr><th>时间</th><th>结果</th><th>类型</th><th>名称</th><th>消息</th></tr></thead>
         <tbody>{rows}</tbody>
@@ -1624,7 +1633,7 @@ class Handler(BaseHTTPRequestHandler):
             elif active == "settings":
                 content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "runlog":
-                content = render_runlog(store)
+                content = render_runlog(store, q.get("kind", [""])[0], q.get("name", [""])[0])
             else:
                 content = render_controls(store)
             self._html(layout(active, title, content, admin["username"] if admin else ""))

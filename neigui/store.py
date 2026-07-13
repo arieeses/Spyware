@@ -301,9 +301,16 @@ class Store:
             "DELETE FROM runlog WHERE id NOT IN (SELECT id FROM runlog ORDER BY id DESC LIMIT 500)")
         self.conn.commit()
 
-    def list_runlog(self, limit: int = 200):
+    def list_runlog(self, limit: int = 200, kind: str = None, name: str = None):
+        where, params = [], []
+        if kind:
+            where.append("kind=?"); params.append(kind)
+        if name:
+            where.append("name=?"); params.append(name)
+        w = (" WHERE " + " AND ".join(where)) if where else ""
+        params.append(limit)
         return self.conn.execute(
-            "SELECT * FROM runlog ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            f"SELECT * FROM runlog{w} ORDER BY id DESC LIMIT ?", params).fetchall()
 
     # —— 清理演示/示例数据 ——
     def purge_demo(self) -> int:
