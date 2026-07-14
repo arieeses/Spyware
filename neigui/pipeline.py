@@ -119,12 +119,15 @@ def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
     now = datetime.now(timezone.utc)
     since_iso = (now - timedelta(hours=max(1, win_h))).isoformat()
     ip_users = store.ip_user_counts(since_iso)   # 窗口内 IP→不同账号数
+    ip_panels = store.ip_panel_map()             # IP→面板集合(跨面板同IP)
+    email_panels = store.email_panel_map()       # 邮箱→面板集合(同邮箱多面板)
     results: List[RiskResult] = []
     pull_tokens = set(store.tokens())
     # 有拉取行为的用户: 正常评分
     for token in pull_tokens:
         feats = build_features(token, store.pulls_for(token), store.user(token), ipc, uac, bl,
-                               ip_users=ip_users, window_hours=win_h, now=now)
+                               ip_users=ip_users, window_hours=win_h, now=now,
+                               ip_panels=ip_panels, email_panels=email_panels)
         results.append(score_token(feats, cfg, off))
     # 同步来但暂无拉取日志的用户: 仍按"画像信号"评分(如「有效期内零流量新号」重点排查),
     # 无拉取所以 IP/UA/ASN 等日志类信号不触发。空拉取的 build_features 很轻。
@@ -132,7 +135,8 @@ def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
         if u["token"] in pull_tokens:
             continue
         feats = build_features(u["token"], [], u, ipc, uac, bl,
-                               ip_users=ip_users, window_hours=win_h, now=now)
+                               ip_users=ip_users, window_hours=win_h, now=now,
+                               email_panels=email_panels)
         results.append(score_token(feats, cfg, off))
     results.sort(key=lambda r: r.score, reverse=True)
     return results

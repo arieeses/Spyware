@@ -139,6 +139,32 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
             f"该 token 的某个 IP 同时被 {f.ip_shared_users} 个账号使用, 疑似聚合点/攻击机",
             tag="IP共用"))
 
+    # 11. 跨面板同IP: 该 token 的拉取 IP 横跨多个前端面板(一台机器打多个机场)
+    if on("cross_panel_ip") and f.cross_panel_ips >= th.cross_panel_ip_min:
+        signals.append(Signal("跨面板同IP", w.cross_panel_ip,
+            f"拉取 IP 横跨 {f.cross_panel_ips} 个前端面板, 疑似一机打多机场", tag="跨面板同IP"))
+
+    # 12. 同邮箱多面板: 同一邮箱在多个面板注册(批量身份)
+    if on("email_multi_panel") and f.email_panels >= th.email_panel_min:
+        signals.append(Signal("同邮箱多面板", w.email_multi_panel,
+            f"该邮箱在 {f.email_panels} 个面板注册, 疑似批量身份", tag="同邮箱多面板"))
+
+    # 13. 固定时段拉取: 拉取时刻聚集在一天内某窄时段, 跨多天(cron/自动化)
+    if (on("fixed_schedule") and f.pull_count >= th.fixed_min_pulls
+            and f.time_days >= th.fixed_min_days
+            and f.time_concentration >= th.fixed_concentration):
+        signals.append(Signal("固定时段拉取", w.fixed_schedule,
+            f"跨 {f.time_days} 天但拉取时刻高度集中(聚集度 {f.time_concentration:.2f}), 呈定时自动化",
+            tag="固定时段"))
+
+    # 14. 流量对称: 近30天上下行接近对称(中转/攻击, 真人应下行远大于上行)
+    if on("traffic_symmetry"):
+        hi, lo = max(f.up30, f.down30), min(f.up30, f.down30)
+        if lo > 0 and (f.up30 + f.down30) >= th.symmetry_min_bytes and lo / hi >= th.symmetry_ratio:
+            signals.append(Signal("流量上下行对称", w.traffic_symmetry,
+                f"近30天上行 {f.up30 / 1048576:.0f}MB / 下行 {f.down30 / 1048576:.0f}MB 接近对称, "
+                "非真人下载型, 疑似中转/攻击", tag="流量对称"))
+
     # 10. 重点排查: 新号(reg_year_from 年后注册)+ 订阅有效期内 + 流量<阈值(付费却几乎不用)
     if on("active_lowtraffic") and f.created_at and f.expired_at:
         exp = f.expired_at if f.expired_at.tzinfo else f.expired_at.replace(tzinfo=timezone.utc)

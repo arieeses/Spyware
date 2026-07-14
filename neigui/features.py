@@ -1,6 +1,7 @@
 """按 token 聚合拉取记录 + v2board 用户画像, 产出特征向量。"""
 from __future__ import annotations
 
+import math
 import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,12 @@ class TokenFeatures:
     distinct_uas: int = 0         # 用过多少个不同 UA(共享/轮换嫌疑)
     online_ips: int = 0           # 近期活跃窗口内的不同 IP 数(在线IP)
     ip_shared_users: int = 0      # 该 token 的IP中, 被最多账号共用的那个的账号数
+    cross_panel_ips: int = 0      # 该 token 的IP横跨的不同面板数(≥2=一机打多机场)
+    email_panels: int = 0         # 该邮箱在多少个不同面板注册过
+    time_concentration: float = 0.0  # 拉取时刻在一天内的聚集度(0~1, 越大越像定时)
+    time_days: int = 0            # 拉取覆盖的不同天数
+    up30: int = 0                 # 近30天上行字节
+    down30: int = 0               # 近30天下行字节
     asn_type_counts: Dict[str, int] = field(default_factory=dict)
     hosting_ratio: float = 0.0
     self_ratio: float = 0.0
@@ -53,7 +60,8 @@ def _parse_dt(s) -> Optional[datetime]:
 def build_features(token: str, pull_rows: List, user_row,
                    ipc: IpClassifier, uac: UaClassifier, bl: Blacklist = None,
                    ip_users: dict = None, window_hours: int = 24,
-                   now: datetime = None) -> TokenFeatures:
+                   now: datetime = None, ip_panels: dict = None,
+                   email_panels: dict = None) -> TokenFeatures:
     f = TokenFeatures(token=token)
     f.pull_count = len(pull_rows)
 
@@ -101,6 +109,19 @@ def build_features(token: str, pull_rows: List, user_row,
     # 该 token 近期在线 IP 中, 被最多其他账号共用的那个的账号数
     if ip_users and recent_ips:
         f.ip_shared_users = max((ip_users.get(ip, 1) for ip in recent_ips), default=0)
+    # 跨面板同IP: 该 token 的所有 IP 横跨的不同面板数
+    if ip_panels and ips:
+        spanned = set()
+        for ip in ips:
+            spanned |= ip_panels.get(ip, set())
+        f.cross_panel_ips = len(spanned)
+    # 固定时段拉取: 拉取时刻在一天内的圆周聚集度(向量长度 R, 越接近1越集中)
+    if len(times) >= 2:
+        f.time_days = len({t.date() for t in times})
+        angs = [2 * math.pi * (t.hour * 60 + t.minute) / 1440.0 for t in times]
+        c = sum(math.cos(a) for a in angs) / len(angs)
+        s = sum(math.sin(a) for a in angs) / len(angs)
+        f.time_concentration = math.hypot(c, s)
     f.asn_type_counts = type_counts
     f.hosting_ratio = type_counts.get("hosting", 0) / n
     f.self_ratio = type_counts.get("self", 0) / n
@@ -119,16 +140,21 @@ def build_features(token: str, pull_rows: List, user_row,
                 f.interval_cv = statistics.pstdev(intervals) / mean
 
     if user_row is not None:
+        keys = user_row.keys()
         f.email = user_row["email"]
         f.user_id = user_row["user_id"]
         f.group_id = user_row["group_id"]
-        f.panel = user_row["panel"] if "panel" in user_row.keys() else None
-        f.plan = user_row["plan"] if "plan" in user_row.keys() else None
+        f.panel = user_row["panel"] if "panel" in keys else None
+        f.plan = user_row["plan"] if "plan" in keys else None
         f.traffic_bytes = user_row["traffic_bytes"] or 0
+        f.up30 = (user_row["up30"] or 0) if "up30" in keys else 0
+        f.down30 = (user_row["down30"] or 0) if "down30" in keys else 0
         f.created_at = _parse_dt(user_row["created_at"])
-        f.expired_at = _parse_dt(user_row["expired_at"] if "expired_at" in user_row.keys() else None)
+        f.expired_at = _parse_dt(user_row["expired_at"] if "expired_at" in keys else None)
         if f.created_at and times:
             f.account_age_days = (f.last_pull - f.created_at).total_seconds() / 86400.0
             f.reg_to_first_pull_secs = (f.first_pull - f.created_at).total_seconds()
+        if email_panels and f.email:
+            f.email_panels = len(email_panels.get(f.email, set()))
 
     return f

@@ -267,7 +267,8 @@ def _user_detail(store, tok: str) -> dict:
     _since = (_now - timedelta(hours=max(1, win_h))).isoformat()
     r = score_token(build_features(tok, pulls, user, IpClassifier(), UaClassifier(), Blacklist(),
                                    ip_users=store.ip_user_counts_for_token(tok, _since),
-                                   window_hours=win_h, now=_now),
+                                   window_hours=win_h, now=_now,
+                                   ip_panels=store.ip_panel_map(), email_panels=store.email_panel_map()),
                     _cfg, _disabled_signals(store))
     plan = user["plan"] if user and "plan" in user.keys() else None
     has_plan = bool(plan and str(plan) not in ("", "0", "None"))
@@ -933,6 +934,10 @@ WEIGHT_CN = {
     "online_ips": ("多IP在线", "一个 token 近期在多个不同 IP 活跃, 疑似分发/分布式扫描"),
     "ip_shared": ("IP共用账号", "该 token 的 IP 被多个账号共用, 疑似聚合点/攻击机"),
     "active_lowtraffic": ("有效期内零流量新号", "2025年后注册+订阅有效期内+流量<5MB, 付费却几乎不用, 疑似只拉节点攻击"),
+    "cross_panel_ip": ("跨面板同IP", "同一拉取 IP 出现在多个前端面板, 疑似一台机器打多个机场"),
+    "email_multi_panel": ("同邮箱多面板", "同一邮箱在多个面板注册, 疑似批量身份"),
+    "fixed_schedule": ("固定时段拉取", "拉取时刻跨多天却高度集中在某窄时段, 呈 cron/自动化"),
+    "traffic_symmetry": ("流量上下行对称", "近30天上下行接近对称(真人应下行远大于上行), 疑似中转/攻击"),
     "ip_silence": ("拉取后IP静默", "拉取IP 拉完就不通/从不连节点(需节点侧日志)"),
     "scan_pattern": ("扫描式短连", "遍历所有节点每个只碰一次(需节点侧日志)"),
     "tls_mismatch": ("TLS指纹矛盾", "UA 与 TLS/JA3 指纹不符(需 JA3 模块)"),
@@ -944,6 +949,10 @@ THRESH_CN = {
     "reg_immediate_secs": "注册即拉-秒内算立即", "new_account_days": "新号判定-账龄天数",
     "self_exclude_ratio": "自有IP排除-占比阈值",
     "reg_year_from": "重点排查-注册年份下限(含)", "active_lowtraffic_max_bytes": "重点排查-流量上限(字节)",
+    "cross_panel_ip_min": "跨面板同IP-面板数下限", "email_panel_min": "同邮箱多面板-面板数下限",
+    "fixed_min_pulls": "固定时段-最少拉取次数", "fixed_min_days": "固定时段-最少跨天数",
+    "fixed_concentration": "固定时段-时刻聚集度阈值(0~1)",
+    "symmetry_ratio": "流量对称-上下行比阈值(0~1)", "symmetry_min_bytes": "流量对称-30天总量下限(字节)",
     "online_window_hours": "在线窗口(小时)-在线IP/共用账号按此统计",
     "multi_ua_min": "多UA判定-不同UA数下限", "online_ips_min": "多IP在线判定-在线IP数下限",
     "ip_shared_min": "IP共用判定-共用账号数下限",

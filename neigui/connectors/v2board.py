@@ -96,6 +96,27 @@ class V2BoardConnector:
             conn.close()
         return n
 
+    def sync_traffic30(self, store: Store, panel: str = None, days: int = 30) -> int:
+        """从 v2_stat_user 汇总近 days 天每用户上下行, 写入本地 up30/down30。返回覆盖用户数。
+        v2_stat_user: user_id / u / d / record_type('d'=按天) / record_at(unix)。失败静默(不影响同步)。"""
+        import time as _t
+        prefix = self.cfg.get("prefix", "v2_")
+        since = int(_t.time()) - days * 86400
+        conn = self._connect(read_timeout=60)
+        by_uid = {}
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT user_id, SUM(u) u30, SUM(d) d30 FROM {prefix}stat_user "
+                    f"WHERE record_type='d' AND record_at>=%s GROUP BY user_id", (since,))
+                for row in cur.fetchall():
+                    by_uid[row["user_id"]] = (row.get("u30") or 0, row.get("d30") or 0)
+        finally:
+            conn.close()
+        if by_uid:
+            store.update_traffic30(panel, by_uid)
+        return len(by_uid)
+
     _ORDER_STATUS = {0: "待支付", 1: "开通中", 2: "已取消", 3: "已完成", 4: "已折抵"}
 
     def query_orders(self, user_id, limit: int = 20):

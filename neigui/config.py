@@ -42,6 +42,10 @@ class Weights:
     online_ips: float = 18.0         # 单 token 近期在多个IP在线(分发/扫描)
     ip_shared: float = 22.0          # 该 token 的IP被多个账号共用(聚合点/攻击机)
     active_lowtraffic: float = 30.0  # 2025+注册 + 有效期内 + 流量<5MB(付费却几乎不用)
+    cross_panel_ip: float = 25.0     # 同一拉取IP横跨多个前端面板(一机打多机场)
+    email_multi_panel: float = 20.0  # 同一邮箱在多个面板注册(批量身份)
+    fixed_schedule: float = 12.0     # 拉取时刻固定在一天内某窄时段(cron/自动化)
+    traffic_symmetry: float = 18.0   # 近30天上下行接近对称(中转/攻击, 非真人下载型)
     blacklist_hit: float = 60.0      # 命中黑名单(IP/UA/ASN, 强, 直接判高危)
     # —— 节点侧信号(需节点日志, 增量5接入, 暂占位) ——
     ip_silence: float = 25.0
@@ -71,6 +75,17 @@ class Thresholds:
     # 重点排查: 注册年份下限(含) + 有效期内流量上限(字节, 默认 5MB)
     reg_year_from: int = 2025
     active_lowtraffic_max_bytes: int = 5 * 1024 * 1024
+    # 跨面板同IP: 该 token 的IP横跨的不同面板数达此值即判
+    cross_panel_ip_min: int = 2
+    # 同邮箱多面板: 邮箱出现在这么多不同面板即判
+    email_panel_min: int = 2
+    # 固定时段拉取: 需最少拉取次数 + 跨天数; 时刻聚集度(0~1, 越接近1越集中)达阈值即判
+    fixed_min_pulls: int = 6
+    fixed_min_days: int = 2
+    fixed_concentration: float = 0.85
+    # 流量对称: 近30天 min(u,d)/max(u,d) 达此值(越接近1越对称)+ 总量下限(字节)
+    symmetry_ratio: float = 0.5
+    symmetry_min_bytes: int = 10 * 1024 * 1024
     # 多UA: 一个 token 用过的不同 UA 数达此值即判「多UA」
     multi_ua_min: int = 4
     # 在线IP: 一个 token 近期活跃 IP 数达此值即判「多IP在线」

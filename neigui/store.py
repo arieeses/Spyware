@@ -161,6 +161,8 @@ _MIGRATIONS = [
     "ALTER TABLE sources ADD COLUMN interval INTEGER DEFAULT 300",
     "ALTER TABLE sources ADD COLUMN sort_order INTEGER DEFAULT 0",
     "ALTER TABLE pulls ADD COLUMN src TEXT",
+    "ALTER TABLE users ADD COLUMN up30 INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN down30 INTEGER DEFAULT 0",
 ]
 
 
@@ -390,6 +392,31 @@ class Store:
         rows = self.conn.execute(
             "SELECT DISTINCT token FROM pulls WHERE ip LIKE ?", (f"%{ip_like}%",)).fetchall()
         return {r["token"] for r in rows}
+
+    def ip_panel_map(self) -> dict:
+        """每个拉取 IP 出现在哪些面板(src)。用于「跨面板同IP」信号。"""
+        out: dict = {}
+        for r in self.conn.execute(
+                "SELECT DISTINCT ip, src FROM pulls WHERE ip IS NOT NULL AND ip<>''").fetchall():
+            out.setdefault(r["ip"], set()).add(r["src"] or "")
+        return out
+
+    def email_panel_map(self) -> dict:
+        """每个邮箱在哪些面板注册过。用于「同邮箱多面板」信号。"""
+        out: dict = {}
+        for r in self.conn.execute(
+                "SELECT DISTINCT email, panel FROM users "
+                "WHERE email IS NOT NULL AND email<>''").fetchall():
+            out.setdefault(r["email"], set()).add(r["panel"] or "")
+        return out
+
+    def update_traffic30(self, panel: str, by_uid: dict) -> None:
+        """按 (panel, user_id) 批量写入近30天上下行。by_uid={user_id:(u30,d30)}。"""
+        cur = self.conn.cursor()
+        for uid, (u30, d30) in by_uid.items():
+            cur.execute("UPDATE users SET up30=?, down30=? WHERE panel=? AND user_id=?",
+                        (int(u30 or 0), int(d30 or 0), panel, uid))
+        self.conn.commit()
 
     def update_source_config(self, sid: int, config: str) -> None:
         self.conn.execute("UPDATE sources SET config=? WHERE id=?", (config, sid))
