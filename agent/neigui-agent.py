@@ -117,8 +117,13 @@ def expand_one(pathspec):
     return []
 
 
+# 只上报订阅拉取行(含 token=); 其余 App 轮询行中央本就丢弃, 在探针侧先滤掉可省 ~97% 上行带宽
+_MAX_LINES_PER_READ = 50000   # 单文件单次上报上限, 防首次同步一次性灌爆内存/带宽
+
+
 def read_new_file(path, st):
-    """单文件增量读; st=该文件的 {offset,inode}。返回 (新行, 新st)。"""
+    """单文件增量读, 只保留含 token= 的行; st=该文件的 {offset,inode}。返回 (新行, 新st)。
+    达到单次上限即停(offset 停在已读处), 剩余下次继续, 避免大日志一次性上传。"""
     stat = os.stat(path)
     off = st.get("offset", 0)
     if st.get("inode") != stat.st_ino or stat.st_size < off:
@@ -126,32 +131,34 @@ def read_new_file(path, st):
     lines = []
     with open(path, encoding="utf-8", errors="replace") as f:
         f.seek(off)
-        while True:
+        while len(lines) < _MAX_LINES_PER_READ:
             ln = f.readline()
             if not ln:
                 break
             ln = ln.rstrip("\n")
-            if ln:
+            if ln and "token=" in ln:   # 只送订阅拉取行, 丢弃海量无 token 的轮询
                 lines.append(ln)
         end = f.tell()
-    return lines, {"offset": end, "inode": stat.st_ino}
+    capped = len(lines) >= _MAX_LINES_PER_READ
+    return lines, {"offset": end, "inode": stat.st_ino}, capped
 
 
 def collect(spec, state):
     """按 spec 读新增行, 按「归属标签」分组(state 按文件路径分别记 offset)。
-    返回 (groups={标签:[行]}, 新state, 是否有可读文件)。无标签的用空串 key。"""
-    groups, newstate, has_file = {}, dict(state), False
+    返回 (groups={标签:[行]}, 新state, 是否有可读文件, 是否还有积压未读完)。"""
+    groups, newstate, has_file, more = {}, dict(state), False, False
     for pathspec, label in parse_spec(spec):
         for fp in expand_one(pathspec):
             has_file = True
             try:
-                fl, fst = read_new_file(fp, state.get(fp, {}))
+                fl, fst, capped = read_new_file(fp, state.get(fp, {}))
                 newstate[fp] = fst
+                more = more or capped
                 if fl:
                     groups.setdefault(label, []).extend(fl)
             except Exception:
                 pass
-    return groups, newstate, has_file
+    return groups, newstate, has_file, more
 
 
 def main():
@@ -175,6 +182,7 @@ def main():
     report_interval = 300
     log_path = a.log
     last_report = 0.0
+    backlog = False    # 上次上报还有积压未读完 → 尽快再报一次直到清空
     while True:
         cfg = http_get(f"{a.master}/api/agent/config?token={a.token}")
         force = False
@@ -189,8 +197,8 @@ def main():
             if cfg.get("reset"):   # 中央要求从头重读(手动导入): 清空各文件 offset
                 state = {}
         now = time.time()
-        if force or (now - last_report) >= report_interval:
-            groups, newstate, has_file = collect(log_path, state)
+        if force or backlog or (now - last_report) >= report_interval:
+            groups, newstate, has_file, more = collect(log_path, state)
             lines = [ln for v in groups.values() for ln in v]  # 兼容旧中央
             ok = http_post(f"{a.master}/api/agent/report?token={a.token}",
                            {"logs": lines, "groups": groups, "metrics": metrics(),
@@ -199,6 +207,7 @@ def main():
             if ok:
                 state = newstate
                 last_report = now
+                backlog = more   # 还有积压则下个 POLL 继续报, 每次上限 5 万行
                 try:
                     os.makedirs(os.path.dirname(a.state), exist_ok=True)
                     with open(a.state, "w", encoding="utf-8") as f:
