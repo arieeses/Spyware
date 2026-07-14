@@ -12,13 +12,47 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Iterator, Optional
+from typing import Iterator, List, Optional
 from urllib.parse import urlsplit, parse_qs
 
 FIELDS = 8
+
+
+def _ip_in_nets(ip: str, nets) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in n for n in nets)
+
+
+def _pick_real_ip(remote: str, forwarded: str, proxy_nets=None) -> str:
+    """从「转发字段 + remote」里挑真实客户端 IP。
+
+    上层反代会把真实 IP 放在末段转发字段(可能是 'client' 或 'client, p1, p2'),
+    remote 则是最近一跳的反代。候选链靠前=更接近真实客户端。
+    - 有反代名单: 取链中第一个「不在反代名单」的 IP;
+    - 无名单: 取转发字段的第一个(即真实客户端), 否则 remote。
+    """
+    chain: List[str] = []
+    for part in (forwarded or "").split(","):
+        p = part.strip()
+        if p and p != "-":
+            chain.append(p)
+    r = (remote or "").strip()
+    if r and r != "-":
+        chain.append(r)
+    if not chain:
+        return ""
+    if proxy_nets:
+        for c in chain:
+            if not _ip_in_nets(c, proxy_nets):
+                return c
+    return chain[0]
 
 
 @dataclass
@@ -32,11 +66,6 @@ class PullRecord:
     uri: str
 
 
-def _real_ip(xff: str, remote: str) -> str:
-    xff = (xff or "").strip()
-    if xff and xff != "-":
-        return xff.split(",")[0].strip()
-    return (remote or "").strip()
 
 
 _MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
@@ -82,15 +111,18 @@ def _token_from_uri(uri: str) -> str:
     return (qs.get("token", [""])[0] or "").strip()
 
 
-# 标准 combined/common 日志: IP - user [time] "METHOD URI PROTO" status bytes "ref" "ua"
+# 标准 combined/common 日志: IP - user [time] "METHOD URI PROTO" status bytes "ref" "ua" ["真实IP/XFF"]
+# 末段可选的引号字段 = 上层反代传下来的真实客户端 IP(如宝塔/1Panel 反代常见)
 _COMBINED = re.compile(
-    r'^(?P<ip>\S+)\s+\S+\s+\S+\s+\[(?P<ts>[^\]]+)\]\s+'
+    r'^(?P<remote>\S+)\s+\S+\s+\S+\s+\[(?P<ts>[^\]]+)\]\s+'
     r'"(?P<req>[^"]*)"\s+(?P<status>\d{3})\s+\S+'
-    r'(?:\s+"[^"]*"\s+"(?P<ua>[^"]*)")?'
+    r'(?:\s+"(?P<ref>[^"]*)")?'
+    r'(?:\s+"(?P<ua>[^"]*)")?'
+    r'(?:\s+"(?P<xff>[^"]*)")?'
 )
 
 
-def _parse_combined(line: str) -> Optional[PullRecord]:
+def _parse_combined(line: str, proxy_nets=None) -> Optional[PullRecord]:
     m = _COMBINED.match(line)
     if not m:
         return None
@@ -107,18 +139,19 @@ def _parse_combined(line: str) -> Optional[PullRecord]:
         status = int(m.group("status"))
     except (ValueError, TypeError):
         status = 0
-    return PullRecord(ts=ts, ip=m.group("ip"), status=status, request_time=0.0,
+    ip = _pick_real_ip(m.group("remote"), m.group("xff"), proxy_nets)
+    return PullRecord(ts=ts, ip=ip, status=status, request_time=0.0,
                       ua=(m.group("ua") or "").strip(), token=token, uri=uri)
 
 
-def _parse_pipe(line: str) -> Optional[PullRecord]:
+def _parse_pipe(line: str, proxy_nets=None) -> Optional[PullRecord]:
     parts = line.split("|")
     if len(parts) < FIELDS:
         return None
     ts = _parse_ts(parts[0])
     if ts is None:
         return None
-    ip = _real_ip(parts[1], parts[2])
+    ip = _pick_real_ip(parts[2], parts[1], proxy_nets)  # 管道格式: [1]=XFF, [2]=remote
     try:
         status = int(parts[3])
     except ValueError:
@@ -134,21 +167,40 @@ def _parse_pipe(line: str) -> Optional[PullRecord]:
                       ua=parts[5], token=token, uri=parts[7])
 
 
-def parse_line(line: str) -> Optional[PullRecord]:
+def parse_line(line: str, proxy_nets=None) -> Optional[PullRecord]:
     line = line.rstrip("\n")
     if not line:
         return None
     # 自定义管道格式优先(字段最全); 否则回退标准 access.log
     if "|" in line:
-        rec = _parse_pipe(line)
+        rec = _parse_pipe(line, proxy_nets)
         if rec is not None:
             return rec
-    return _parse_combined(line)
+    return _parse_combined(line, proxy_nets)
 
 
-def parse_file(path: str) -> Iterator[PullRecord]:
+def load_proxy_nets():
+    """读取反代IP名单(CIDR/IP), 用于从转发链里剔除反代、取真实客户端IP。"""
+    from .config import CONFIG
+    nets = []
+    try:
+        with open(CONFIG.proxy_ips_file, encoding="utf-8") as f:
+            for ln in f:
+                ln = ln.split("#", 1)[0].strip()
+                if not ln:
+                    continue
+                try:
+                    nets.append(ipaddress.ip_network(ln, strict=False))
+                except ValueError:
+                    continue
+    except (FileNotFoundError, AttributeError):
+        pass
+    return nets
+
+
+def parse_file(path: str, proxy_nets=None) -> Iterator[PullRecord]:
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
-            rec = parse_line(line)
+            rec = parse_line(line, proxy_nets)
             if rec is not None:
                 yield rec

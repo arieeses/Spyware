@@ -163,6 +163,16 @@ class Store:
             row = self.conn.execute("SELECT COUNT(*) FROM pulls").fetchone()
         return row[0] if row else 0
 
+    def clear_pulls(self, src: Optional[str] = None) -> int:
+        """清空日志库: src 指定则只删该来源, 否则全清。返回删除条数。"""
+        cur = self.conn.cursor()
+        if src:
+            cur.execute("DELETE FROM pulls WHERE src=?", (src,))
+        else:
+            cur.execute("DELETE FROM pulls")
+        self.conn.commit()
+        return cur.rowcount
+
     def ip_user_counts(self, since_iso: Optional[str] = None) -> dict:
         """每个 IP 被多少个不同账号(token)使用。since_iso 限定时间窗口(在线判定)。
         返回 {ip: distinct_token_count}, 供「IP共用账号」信号用。"""
@@ -170,6 +180,21 @@ class Store:
         args: list = []
         if since_iso:
             sql += " WHERE ts>=?"
+            args.append(since_iso)
+        sql += " GROUP BY ip"
+        return {r["ip"]: r["c"] for r in self.conn.execute(sql, args).fetchall() if r["ip"]}
+
+    def ip_user_counts_for_token(self, token: str, since_iso: Optional[str] = None) -> dict:
+        """只统计某 token 用过的 IP 各自被多少账号共用(详情页用, 避免全表扫描)。"""
+        sql = ("SELECT ip, COUNT(DISTINCT token) c FROM pulls WHERE ip IN "
+               "(SELECT DISTINCT ip FROM pulls WHERE token=?")
+        args: list = [token]
+        if since_iso:
+            sql += " AND ts>=?"
+            args.append(since_iso)
+        sql += ")"
+        if since_iso:
+            sql += " AND ts>=?"
             args.append(since_iso)
         sql += " GROUP BY ip"
         return {r["ip"]: r["c"] for r in self.conn.execute(sql, args).fetchall() if r["ip"]}

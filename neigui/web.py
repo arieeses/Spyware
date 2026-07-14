@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from . import __version__, auth, sysinfo
 from .config import BASE_DIR, CONFIG
-from .log_parser import parse_line
+from .log_parser import load_proxy_nets, parse_line
 from .pipeline import analyze, decide
 from .runner import run_all, run_source
 from .store import Store
@@ -240,7 +240,8 @@ def _user_detail(store, tok: str) -> dict:
     _now = datetime.now(timezone.utc)
     _since = (_now - timedelta(hours=max(1, win_h))).isoformat()
     r = score_token(build_features(tok, pulls, user, IpClassifier(), UaClassifier(), Blacklist(),
-                                   ip_users=store.ip_user_counts(_since), window_hours=win_h, now=_now),
+                                   ip_users=store.ip_user_counts_for_token(tok, _since),
+                                   window_hours=win_h, now=_now),
                     CONFIG, _disabled_signals(store))
     plan = user["plan"] if user and "plan" in user.keys() else None
     has_plan = bool(plan and str(plan) not in ("", "0", "None"))
@@ -347,7 +348,7 @@ class SyslogListener(threading.Thread):
                             continue
                         i = text.find(tag + ": ")
                         if i >= 0:
-                            rec = parse_line(text[i + len(tag) + 2:].strip())
+                            rec = parse_line(text[i + len(tag) + 2:].strip(), load_proxy_nets())
                             if rec:
                                 store.add_pulls([rec], src=s["name"])
                             break
@@ -764,10 +765,10 @@ def render_runlog(store: Store, kind: str = "", name: str = "", size: str = "10"
     </div>"""
 
 
-def render_logstore(store: Store, src: str = "", size: str = "50", page: str = "1") -> str:
+def render_logstore(store: Store, src: str = "", size: str = "10", page: str = "1") -> str:
     """日志库: 展示各接口/探针上报入库的拉取日志原文, 按来源(数据源)分类。"""
     total = store.count_pulls_by_src(src or None)
-    psize, pg, pages, all_mode = _paginate(size, page, total, 50)
+    psize, pg, pages, all_mode = _paginate(size, page, total, 10)
     off = 0 if all_mode else (pg - 1) * psize
     rows = ""
     for r in store.list_pulls(limit=(total or 1) if all_mode else psize, offset=off, src=src or None):
@@ -793,11 +794,15 @@ def render_logstore(store: Store, src: str = "", size: str = "50", page: str = "
                  f'href="/logstore?src={quote(sn)}&size={quote(size)}">{esc(sn)}</a>')
 
     pager = _pager_html("/logstore", {"src": src} if src else {},
-                        size if str(size) in ("20", "50", "100", "200", "500") else "50",
-                        pg, pages, ["20", "50", "100", "200", "500"])
+                        size if str(size) in ("10", "20", "50", "100", "200") else "10",
+                        pg, pages, ["10", "20", "50", "100", "200"])
+    clear = (f'<form method="post" action="/logstore/clear" style="margin-left:auto" '
+             f'onsubmit="return confirm(\'清空{("来源 " + src) if src else "全部"}的日志库记录? 不可恢复\')">'
+             f'<input type="hidden" name="src" value="{esc(src)}">'
+             f'<button class="btn sm danger">清空{("本来源" if src else "全部")}</button></form>')
     return f"""
     <div class="card">
-      <div class="card-title">日志库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {total} 条拉取记录</span></div>
+      <div class="card-title">日志库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {total} 条拉取记录</span>{clear}</div>
       <div class="tabs">{tabs}</div>
       <div class="tablewrap"><table class="grid">
         <thead><tr><th>时间</th><th>来源</th><th>Token</th><th>IP</th><th>状态</th><th>UA</th><th>接口</th></tr></thead>
@@ -952,6 +957,8 @@ def render_whitelist(msg="", err="", tab="white") -> str:
                            "/whitelist/save-hosting", hosting, extra=fetch_btn)
             + _setting_row("客户端 UA 白名单", "正规客户端 UA(clash/v2rayN/Shadowrocket 等), 每行一个正则; 配合住宅 ASN 视为正常。",
                            "/whitelist/save-ua", _read_file(CONFIG.ua_clients_file))
+            + _setting_row("反代 / 中转 IP 过滤", "上层反代的 IP。系统默认已优先取日志末段的真实客户端 IP; 若转发链里混入反代 IP, 在此登记会被自动剔除。每行一个 IP 或 CIDR。",
+                           "/whitelist/save-proxy", _read_file(CONFIG.proxy_ips_file))
             + '<form id="fetchhosting" method="post" action="/whitelist/fetch-hosting"></form>')
         note = "白名单: 命中即视为正常 / 排除, 降低误杀。"
     else:
@@ -1912,7 +1919,7 @@ class Handler(BaseHTTPRequestHandler):
                 content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "logstore":
                 content = render_logstore(store, q.get("src", [""])[0],
-                                          q.get("size", ["50"])[0], q.get("page", ["1"])[0])
+                                          q.get("size", ["10"])[0], q.get("page", ["1"])[0])
             elif active == "runlog":
                 content = render_runlog(store, q.get("kind", [""])[0], q.get("name", [""])[0],
                                         q.get("size", ["10"])[0], q.get("page", ["1"])[0])
@@ -1942,7 +1949,8 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     payload = {}
                 raw = payload.get("logs", []) or []
-                recs = [r for r in (parse_line(ln) for ln in raw) if r]
+                pnets = load_proxy_nets()
+                recs = [r for r in (parse_line(ln, pnets) for ln in raw) if r]
                 n = store.add_pulls(recs, src=src["name"])
                 sent = len(raw)
                 met = payload.get("metrics", {}) or {}
@@ -1979,7 +1987,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not src:
                     self._send(b'{"error":"invalid key"}', "application/json; charset=utf-8"); return
                 text = raw.decode("utf-8", "replace")
-                recs = [r for r in (parse_line(ln) for ln in text.splitlines()) if r]
+                pnets = load_proxy_nets()
+                recs = [r for r in (parse_line(ln, pnets) for ln in text.splitlines()) if r]
                 n = store.add_pulls(recs, src=src["name"])
                 self._send(json.dumps({"ok": n}).encode(), "application/json; charset=utf-8")
             finally:
@@ -2108,6 +2117,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/runlog/clear":
                 store.clear_runlog(form.get("kind") or None, form.get("name") or None)
                 self._to("/runlog"); return
+            if path == "/logstore/clear":
+                sname = form.get("src") or None
+                store.clear_pulls(sname)
+                self._to("/logstore" + (f"?src={quote(sname)}" if sname else "")); return
             if path == "/sources/delete":
                 store.delete_source(int(form["id"])); self._back(); return
             if path == "/sources/toggle":
@@ -2180,6 +2193,10 @@ class Handler(BaseHTTPRequestHandler):
                 with open(CONFIG.ua_clients_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
                 self._to("/whitelist?msg=" + quote("UA 白名单已保存")); return
+            if path == "/whitelist/save-proxy":
+                with open(CONFIG.proxy_ips_file, "w", encoding="utf-8") as f:
+                    f.write(form.get("content", ""))
+                self._to("/whitelist?msg=" + quote("反代 IP 过滤已保存")); return
             if path == "/blacklist/save-ip":
                 with open(CONFIG.ip_blacklist_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))

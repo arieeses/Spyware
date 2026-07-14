@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 from typing import Tuple
 
-from .log_parser import parse_line
+from .log_parser import load_proxy_nets, parse_line
 from .store import Store
 
 
@@ -28,7 +28,7 @@ def _expand_paths(spec: str):
     return sorted(set(os.path.abspath(f) for f in files))
 
 
-def _ingest_one(store: Store, path: str, reset: bool, src: str = None) -> int:
+def _ingest_one(store: Store, path: str, reset: bool, src: str = None, proxy_nets=None) -> int:
     st = os.stat(path)
     start = 0
     state = None if reset else store.get_ingest_state(path)
@@ -41,7 +41,7 @@ def _ingest_one(store: Store, path: str, reset: bool, src: str = None) -> int:
             line = f.readline()
             if not line:
                 break
-            rec = parse_line(line)
+            rec = parse_line(line, proxy_nets)
             if rec is not None:
                 recs.append(rec)
         end = f.tell()
@@ -54,8 +54,9 @@ def ingest_logfile(store: Store, path_spec: str, reset: bool = False,
                    src: str = None) -> Tuple[int, int, int]:
     """增量导入日志。path_spec 支持多行/通配(按日期滚动的日志用 *sub.log 匹配)。
     返回 (新增条数, 匹配文件数, 0)。每个文件各自记录 offset。"""
+    proxy_nets = load_proxy_nets()
     files = _expand_paths(path_spec)
-    total = sum(_ingest_one(store, f, reset, src) for f in files)
+    total = sum(_ingest_one(store, f, reset, src, proxy_nets) for f in files)
     return total, len(files), 0
 
 

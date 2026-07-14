@@ -85,6 +85,7 @@ class Config:
     ip_blacklist_file: str = os.path.join(DATA_DIR, "ip_blacklist.txt")
     ua_blacklist_file: str = os.path.join(DATA_DIR, "ua_blacklist.txt")
     asn_blacklist_file: str = os.path.join(DATA_DIR, "asn_blacklist.txt")
+    proxy_ips_file: str = os.path.join(DATA_DIR, "proxy_ips.txt")
     db_path: str = field(default_factory=_default_db_path)
 
 

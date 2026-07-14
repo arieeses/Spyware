@@ -39,6 +39,9 @@ class V2BoardConnector:
             database=c["database"],
             charset="utf8mb4",
             cursorclass=pymysql.cursors.DictCursor,
+            connect_timeout=5,   # 避免详情页/同步在库不可达时长时间卡住
+            read_timeout=10,
+            write_timeout=10,
         )
 
     # v2board/Xboard 的 v2_user 列名(可在面板"字段映射"里覆盖)
