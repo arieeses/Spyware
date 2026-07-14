@@ -1458,12 +1458,14 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
 
     return f"""
     <div class="card">
-      <div class="card-title" style="flex-wrap:wrap;gap:8px">用户风险管理
+      <div class="card-title" style="flex-wrap:wrap;gap:8px">
+        <span class="chips" style="margin:0">{chips}</span>
+        {searchbox}</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
         <button class="btn sm ghost" type="button" onclick="openM('colModal')">显示列 ▾</button>
         <a class="btn sm ghost" href="/risk/export?level={lf}&panel={pf}&q={quote(search)}"
            title="导出当前筛选结果为 CSV(最多2万行)">⬇ 导出CSV</a>
-        <span class="chips" style="margin:0">{chips}</span>
-        {searchbox}</div>
+      </div>
       <div class="tabs">{tabs}</div>
       {panel_bar}
       <div class="tablewrap">
