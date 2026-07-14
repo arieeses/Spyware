@@ -1518,19 +1518,19 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('exportModal')">取消</button><button class="btn">导出</button></div>
       </form>
     </div></div>
-    <div class="modal-bg" id="sameIpModal"><div class="modal" style="width:min(520px,94vw)">
-      <div style="display:flex;align-items:center"><h3 style="margin:0" id="sameIpTitle">同 IP 账号</h3>
-        <button class="btn sm ghost" type="button" style="margin-left:auto" onclick="closeM('sameIpModal')">关闭</button></div>
-      <div id="sameIpBody" class="udetail"><div class="dim">加载中…</div></div>
+    <div class="modal-bg" id="sameIpModal"><div class="modal" style="width:min(520px,94vw);position:relative;overflow:hidden">
+      <button class="modalx" type="button" onclick="closeM('sameIpModal')" aria-label="关闭">×</button>
+      <h4 style="margin:0 0 10px" id="sameIpTitle">同 IP 账号</h4>
+      <div id="sameIpBody" class="udetail modalscroll"><div class="dim">加载中…</div></div>
     </div></div>
-    <div class="modal-bg" id="userModal"><div class="modal" style="width:min(720px,95vw);position:relative">
+    <div class="modal-bg" id="userModal"><div class="modal" style="width:min(720px,95vw);position:relative;overflow:hidden">
       <button class="modalx" type="button" onclick="closeM('userModal')" aria-label="关闭">×</button>
-      <div id="userBody" class="udetail"><div class="dim">加载中…</div></div>
+      <div id="userBody" class="udetail modalscroll"><div class="dim">加载中…</div></div>
     </div></div>
-    <div class="modal-bg" id="trafficModal"><div class="modal" style="width:min(640px,95vw);position:relative">
+    <div class="modal-bg" id="trafficModal"><div class="modal" style="width:min(640px,95vw);position:relative;overflow:hidden">
       <button class="modalx" type="button" onclick="closeM('trafficModal')" aria-label="关闭">×</button>
       <h4 style="margin:0 0 10px">流量记录</h4>
-      <div id="trafficBody"><div class="dim">加载中…</div></div>
+      <div id="trafficBody" class="modalscroll"><div class="dim">加载中…</div></div>
     </div></div>"""
 
 
@@ -1799,8 +1799,10 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .udk {{ color:var(--dim); flex:0 0 64px; }}
   .udv {{ min-width:0; word-break:break-all; }}
   .modalx {{ position:absolute; top:10px; right:12px; width:30px; height:30px; border:0; background:transparent;
-    font-size:22px; line-height:1; color:#98a0ab; cursor:pointer; border-radius:6px; }}
+    font-size:22px; line-height:1; color:#98a0ab; cursor:pointer; border-radius:6px; z-index:2; }}
   .modalx:hover {{ background:#eceff3; color:#333; }}
+  /* 滚动放内层, 靠弹窗内边距把滚动条与圆角错开(外框圆角完整) */
+  .modalscroll {{ max-height:74vh; overflow-y:auto; overflow-x:hidden; }}
   @media (max-width:560px) {{ .udgrid {{ grid-template-columns:1fr; }} }}
   .pager {{ display:flex; gap:4px; align-items:center; justify-content:flex-end; margin-top:14px; flex-wrap:wrap; }}
   .pg {{ min-width:30px; height:30px; padding:0 8px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:6px; text-decoration:none; color:var(--txt); font-size:13px; }}
