@@ -29,7 +29,29 @@ def _disabled_signals(store) -> set:
         return set()
 
 
+import threading
+import time as _time
+
+_ANALYZE_CACHE = {"key": None, "val": None}
+_ANALYZE_LOCK = threading.Lock()
+
+
 def analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
+    """带缓存: 数据未变(data_version 不变)且在 5 分钟窗口内, 直接复用上次结果。
+    翻页/筛选/搜索都走缓存, 不再对全部用户重算。"""
+    key = (store.data_version(), store.get_kv("signals_off", ""),
+           store.get_kv("rewrite_scope", ""), int(_time.time() // 300))
+    with _ANALYZE_LOCK:
+        if _ANALYZE_CACHE["key"] == key and _ANALYZE_CACHE["val"] is not None:
+            return _ANALYZE_CACHE["val"]
+    val = _analyze(store, cfg)
+    with _ANALYZE_LOCK:
+        _ANALYZE_CACHE["key"] = key
+        _ANALYZE_CACHE["val"] = val
+    return val
+
+
+def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
     from datetime import datetime, timedelta, timezone
     ipc = IpClassifier()
     uac = UaClassifier()

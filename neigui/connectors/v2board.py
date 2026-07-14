@@ -85,6 +85,7 @@ class V2BoardConnector:
                     )
                     n += 1
             store.commit()
+            store.bump_data_version()   # 同步改了用户数据, 让风险分析缓存失效
         finally:
             conn.close()
         return n

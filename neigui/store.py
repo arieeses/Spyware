@@ -133,6 +133,17 @@ class Store:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_pulls_uniq "
                 "ON pulls(token, ts, ip, uri)")
 
+    def bump_data_version(self) -> None:
+        """数据变更计数, 供分析结果缓存判断是否需要重算。"""
+        self.conn.execute(
+            "INSERT INTO kv(key,value) VALUES('data_version','1') "
+            "ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT)")
+        self.conn.commit()
+
+    def data_version(self) -> str:
+        row = self.conn.execute("SELECT value FROM kv WHERE key='data_version'").fetchone()
+        return row[0] if row else "0"
+
     def add_pulls(self, recs: Iterable[PullRecord], src: Optional[str] = None) -> int:
         n = 0
         cur = self.conn.cursor()
@@ -144,6 +155,8 @@ class Store:
             )
             n += cur.rowcount  # 被 IGNORE 的重复行 rowcount=0
         self.conn.commit()
+        if n:
+            self.bump_data_version()
         return n
 
     def list_pulls(self, limit: int = 200, offset: int = 0, src: Optional[str] = None):
@@ -172,6 +185,7 @@ class Store:
         else:
             cur.execute("DELETE FROM pulls")
         self.conn.commit()
+        self.bump_data_version()
         return cur.rowcount
 
     def ip_user_counts(self, since_iso: Optional[str] = None) -> dict:
@@ -305,6 +319,8 @@ class Store:
                     purged += cur.rowcount
         self.conn.execute("DELETE FROM sources WHERE id=?", (sid,))
         self.conn.commit()
+        if purged:
+            self.bump_data_version()
         return purged
 
     def move_source(self, sid: int, direction: str) -> None:
