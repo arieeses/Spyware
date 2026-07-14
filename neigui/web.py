@@ -1934,9 +1934,10 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
       var h='<h4>账号信息</h4><div class="udgrid">';
       h+=udkv('邮箱',esc0(d.email));
       h+=udkv('套餐',esc0(d.plan||'未购买'));
+      h+=udkv('机场',esc0(d.panel||'-'));
+      h+=udkv('状态',(d.banned?'<span style="color:#e5484d">已封禁</span>':'正常'));
       h+=udkv('注册时间',esc0(d.created_at));
       h+=udkv('到期时间',esc0(d.expired));
-      h+=udkv('状态',(d.banned?'<span style="color:#e5484d">已封禁</span>':'正常'));
       h+=udkv('流量','<a href="#" onclick="trafficRecords(\\''+esc0(d.token)+'\\',1);return false" style="color:#5b8def">流量记录 ›</a>');
       h+='</div>';
       h+='<h4>风险</h4><div class="udgrid">';
