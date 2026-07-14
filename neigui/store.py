@@ -275,6 +275,13 @@ class Store:
         self.conn.execute("DELETE FROM scores WHERE token=?", (token,))
         self.conn.commit()
 
+    def upsert_score(self, row) -> None:
+        """写入/替换单个 token 的评分(移出内鬼库时立即让它回名单)。"""
+        ph = ",".join("?" * len(_SCORE_COLS))
+        self.conn.execute(
+            f"INSERT OR REPLACE INTO scores({','.join(_SCORE_COLS)}) VALUES({ph})", row)
+        self.conn.commit()
+
     def score_counts(self) -> dict:
         out = {"高": 0, "中": 0, "低": 0, "正常": 0, "excluded": 0, "total": 0}
         for r in self.conn.execute("SELECT level, COUNT(*) c FROM scores GROUP BY level").fetchall():

@@ -2631,8 +2631,14 @@ class Handler(BaseHTTPRequestHandler):
                     store.delete_score(tok)   # 立即从名单移除, 不等后台重算
                 self._back(); return
             if path == "/insiders/remove":
-                store.remove_insider(form.get("token", "").strip())
-                self._to("/insiders?msg=" + quote("已移出内鬼库")); return
+                tok = form.get("token", "").strip()
+                store.remove_insider(tok)
+                try:
+                    from .pipeline import recompute_one
+                    recompute_one(store, tok)   # 立即算回名单, 不等后台
+                except Exception:  # noqa: BLE001
+                    pass
+                self._to("/insiders?msg=" + quote("已移出内鬼库, 已回到风险名单")); return
             if path == "/agent/logpath":
                 src = store.get_source(int(form["id"]))
                 if src:

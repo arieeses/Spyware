@@ -91,6 +91,29 @@ def recompute_scores(store: Store, cfg: Config = None) -> int:
         return len(results)
 
 
+def recompute_one(store: Store, token: str, cfg: Config = None) -> None:
+    """只重算并写回单个 token 的评分(移出内鬼库后立即让它回名单, 不等后台全量)。"""
+    from datetime import datetime, timedelta, timezone
+    from .enrich import Blacklist, IpClassifier, UaClassifier, FeatureLib
+    cfg = cfg or load_config(store)
+    if token in store.insider_tokens():
+        return
+    off = _disabled_signals(store)
+    win_h = cfg.thresholds.online_window_hours
+    now = datetime.now(timezone.utc)
+    since_iso = (now - timedelta(hours=max(1, win_h))).isoformat()
+    feats = build_features(
+        token, store.pulls_for(token), store.user(token),
+        IpClassifier(), UaClassifier(), Blacklist(),
+        ip_users=store.ip_user_counts_for_token(token, since_iso),
+        window_hours=win_h, now=now,
+        ip_panels=store.ip_panel_map(), email_panels=store.email_panel_map(),
+        featlib=FeatureLib(store), insiderlib=FeatureLib.from_insiders(store),
+        burst_window=cfg.thresholds.burst_ua_window,
+        night_start=cfg.thresholds.night_start_hour, night_end=cfg.thresholds.night_end_hour)
+    store.upsert_score(_score_row(score_token(feats, cfg, off)))
+
+
 def _score_row(r: RiskResult):
     sigs = [{"name": s.name, "points": s.points, "detail": s.detail, "tag": s.tag}
             for s in r.signals]
