@@ -149,6 +149,68 @@ class Blacklist:
         return any(re.search(p, ua, re.IGNORECASE) for p in self.ua_patterns)
 
 
+class FeatureLib:
+    """内鬼特征库: 手工登记的 IP/CIDR、UA(正则/子串)、ASN 号、邮箱(子串)。命中即算内鬼特征。"""
+
+    def __init__(self, store):
+        self.ip_nets: List = []
+        self.ua_pats: List[str] = []
+        self.asns = set()
+        self.emails: List[str] = []
+        try:
+            rows = store.list_signatures()
+        except Exception:  # noqa: BLE001
+            rows = []
+        for r in rows:
+            k, v = r["kind"], (r["value"] or "").strip()
+            if not v:
+                continue
+            if k == "ip":
+                try:
+                    self.ip_nets.append(ipaddress.ip_network(v, strict=False))
+                except ValueError:
+                    pass
+            elif k == "ua":
+                self.ua_pats.append(v)
+            elif k == "asn":
+                vv = v.lower().lstrip("a").lstrip("s")
+                if vv.isdigit():
+                    self.asns.add(int(vv))
+            elif k == "email":
+                self.emails.append(v.lower())
+        self.empty = not (self.ip_nets or self.ua_pats or self.asns or self.emails)
+
+    def match(self, ips, uas, email, asndb=None) -> str:
+        """返回命中原因(空串=未命中)。"""
+        if self.empty:
+            return ""
+        for ip in ips or ():
+            try:
+                addr = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if any(addr in n for n in self.ip_nets):
+                return f"IP {ip} 命中特征库"
+            if self.asns and asndb is not None:
+                asn, _ = asndb.lookup(ip)
+                if asn in self.asns:
+                    return f"AS{asn} 命中特征库"
+        for ua in uas or ():
+            for p in self.ua_pats:
+                try:
+                    if re.search(p, ua or "", re.IGNORECASE):
+                        return "UA 命中特征库"
+                except re.error:
+                    if p.lower() in (ua or "").lower():
+                        return "UA 命中特征库"
+        if email:
+            el = email.lower()
+            for e in self.emails:
+                if e in el:
+                    return "邮箱命中特征库"
+        return ""
+
+
 class UaClassifier:
     def __init__(self, clients_file: Optional[str] = None):
         self.client_patterns = _load_patterns(clients_file or CONFIG.ua_clients_file)

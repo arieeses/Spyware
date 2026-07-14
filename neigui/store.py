@@ -117,6 +117,15 @@ CREATE TABLE IF NOT EXISTS scores (
 CREATE INDEX IF NOT EXISTS idx_scores_score ON scores(score DESC);
 CREATE INDEX IF NOT EXISTS idx_scores_level ON scores(level, score DESC);
 CREATE INDEX IF NOT EXISTS idx_scores_panel ON scores(panel);
+
+-- 内鬼特征库: 手工登记已知内鬼特征(IP/UA/ASN/邮箱), 命中即加分
+CREATE TABLE IF NOT EXISTS signatures (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind       TEXT,           -- ip | ua | asn | email
+  value      TEXT,
+  note       TEXT,
+  created_at TEXT
+);
 """
 
 _SCORE_COLS = ("token", "score", "level", "excluded", "tags", "signals", "email", "user_id",
@@ -433,6 +442,22 @@ class Store:
                     f"AND ip IS NOT NULL AND ip<>''", chunk).fetchall():
                 out.setdefault(r["token"], []).append(r["ip"])
         return out
+
+    # —— 内鬼特征库 ——
+    def add_signature(self, kind: str, value: str, note: str = "") -> None:
+        self.conn.execute(
+            "INSERT INTO signatures(kind, value, note, created_at) VALUES(?,?,?,?)",
+            (kind, value.strip(), note.strip(), datetime.now().isoformat(timespec="seconds")))
+        self.conn.commit()
+        self.bump_data_version()   # 影响评分, 触发重算
+
+    def list_signatures(self):
+        return self.conn.execute("SELECT * FROM signatures ORDER BY kind, id DESC").fetchall()
+
+    def delete_signature(self, sid: int) -> None:
+        self.conn.execute("DELETE FROM signatures WHERE id=?", (sid,))
+        self.conn.commit()
+        self.bump_data_version()
 
     def ip_panel_map(self) -> dict:
         """每个拉取 IP 出现在哪些面板(src)。用于「跨面板同IP」信号。"""

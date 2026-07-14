@@ -139,6 +139,11 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
             f"该 token 的某个 IP 同时被 {f.ip_shared_users} 个账号使用, 疑似聚合点/攻击机",
             tag="IP共用"))
 
+    # 命中内鬼特征库(手工登记的 IP/UA/ASN/邮箱): 强信号
+    if on("feature_lib") and f.feature_hit:
+        signals.append(Signal("命中内鬼特征库", w.feature_lib,
+            f.feature_reason or "命中内鬼特征库", tag="内鬼特征"))
+
     # 11. 跨面板同IP: 该 token 的拉取 IP 横跨多个前端面板(一台机器打多个机场)
     if on("cross_panel_ip") and f.cross_panel_ips >= th.cross_panel_ip_min:
         signals.append(Signal("跨面板同IP", w.cross_panel_ip,

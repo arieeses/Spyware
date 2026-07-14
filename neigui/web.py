@@ -77,6 +77,7 @@ NAV = [
         ("risk", "风险名单", "/risk"),
         ("rules", "风险规则", "/rules"),
         ("whitelist", "黑白名单", "/whitelist"),
+        ("featlib", "内鬼特征库", "/featlib"),
         ("domains", "入口域名", "/domains"),
     ]),
     ("运行", [
@@ -265,10 +266,12 @@ def _user_detail(store, tok: str) -> dict:
     win_h = _cfg.thresholds.online_window_hours
     _now = datetime.now(timezone.utc)
     _since = (_now - timedelta(hours=max(1, win_h))).isoformat()
+    from .enrich import FeatureLib
     r = score_token(build_features(tok, pulls, user, IpClassifier(), UaClassifier(), Blacklist(),
                                    ip_users=store.ip_user_counts_for_token(tok, _since),
                                    window_hours=win_h, now=_now,
-                                   ip_panels=store.ip_panel_map(), email_panels=store.email_panel_map()),
+                                   ip_panels=store.ip_panel_map(), email_panels=store.email_panel_map(),
+                                   featlib=FeatureLib(store)),
                     _cfg, _disabled_signals(store))
     plan = user["plan"] if user and "plan" in user.keys() else None
     has_plan = bool(plan and str(plan) not in ("", "0", "None"))
@@ -938,6 +941,7 @@ WEIGHT_CN = {
     "email_multi_panel": ("同邮箱多面板", "同一邮箱在多个面板注册, 疑似批量身份"),
     "fixed_schedule": ("固定时段拉取", "拉取时刻跨多天却高度集中在某窄时段, 呈 cron/自动化"),
     "traffic_symmetry": ("流量上下行对称", "近30天上下行接近对称(真人应下行远大于上行), 疑似中转/攻击"),
+    "feature_lib": ("命中内鬼特征库", "命中你手工登记的内鬼特征(IP/UA/ASN/邮箱), 强信号"),
     "ip_silence": ("拉取后IP静默", "拉取IP 拉完就不通/从不连节点(需节点侧日志)"),
     "scan_pattern": ("扫描式短连", "遍历所有节点每个只碰一次(需节点侧日志)"),
     "tls_mismatch": ("TLS指纹矛盾", "UA 与 TLS/JA3 指纹不符(需 JA3 模块)"),
@@ -1071,6 +1075,44 @@ def _asn_db_card() -> str:
         <input name="url" placeholder="留空=GeoLite2-ASN.mmdb; 也可填 iptoasn 的 ...ip2asn-v4.tsv.gz" style="flex:1;max-width:460px">
         <button class="btn">下载 / 更新 ASN 库</button></div>
     </form>"""
+
+
+_SIG_KIND_CN = {"ip": "IP / CIDR", "ua": "UA(正则/子串)", "asn": "ASN 号", "email": "邮箱(子串)"}
+
+
+def render_featurelib(store, msg="", err="") -> str:
+    rows = store.list_signatures()
+    trs = ""
+    for r in rows:
+        trs += (f'<tr><td>{esc(_SIG_KIND_CN.get(r["kind"], r["kind"]))}</td>'
+                f'<td class="mono small">{esc(r["value"])}</td>'
+                f'<td class="small dim">{esc(r["note"] or "")}</td>'
+                f'<td class="small dim">{esc((r["created_at"] or "")[:16])}</td>'
+                f'<td><form method="post" action="/featlib/delete" onsubmit="return confirm(\'删除?\')" style="margin:0">'
+                f'<input type="hidden" name="id" value="{r["id"]}"><button class="btn sm danger">删除</button></form></td></tr>')
+    if not trs:
+        trs = '<tr><td colspan="5" class="dim" style="padding:16px">还没登记特征, 用上面的表单添加</td></tr>'
+    return f"""{_card_alert(msg, err)}
+    <div class="card">
+      <div class="card-title">内鬼特征库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {len(rows)} 条</span></div>
+      <div class="dim small" style="margin-bottom:10px">手工登记已确认内鬼的特征, 任何用户命中即触发「命中内鬼特征库」信号(强, 权重可在风险规则页调)。抓到一个内鬼, 把它的机房IP/ASN/UA/邮箱填进来, 同伙下次露头即被逮。</div>
+      <form method="post" action="/featlib/add" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select name="kind" style="padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
+          <option value="ip">IP / CIDR</option>
+          <option value="ua">UA(正则/子串)</option>
+          <option value="asn">ASN 号(如 AS45090)</option>
+          <option value="email">邮箱(子串)</option>
+        </select>
+        <input name="value" required placeholder="特征值, 如 47.115.0.0/16 / Surfboard / AS45090 / @163.com"
+               style="flex:1;min-width:240px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
+        <input name="note" placeholder="备注(选填)" style="width:160px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
+        <button class="btn">添加</button>
+      </form>
+      <div class="tablewrap" style="margin-top:12px"><table class="grid">
+        <thead><tr><th>类型</th><th>特征值</th><th>备注</th><th>添加时间</th><th>操作</th></tr></thead>
+        <tbody>{trs}</tbody>
+      </table></div>
+    </div>"""
 
 
 def render_whitelist(msg="", err="", tab="white") -> str:
@@ -1880,6 +1922,7 @@ VIEWS = {
     "/risk": ("risk", "风险名单"),
     "/rules": ("rules", "风险规则"),
     "/whitelist": ("whitelist", "黑白名单"),
+    "/featlib": ("featlib", "内鬼特征库"),
     "/domains": ("domains", "入口域名"),
     "/run": ("run", "运行控制"),
     "/runlog": ("runlog", "运行日志"),
@@ -2110,6 +2153,8 @@ class Handler(BaseHTTPRequestHandler):
             elif active == "whitelist":
                 content = render_whitelist(q.get("msg", [""])[0], q.get("err", [""])[0],
                                            q.get("tab", ["white"])[0])
+            elif active == "featlib":
+                content = render_featurelib(store, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "domains":
                 content = render_domains(store, q.get("panel", [""])[0], q.get("tier", [""])[0],
                                          q.get("msg", [""])[0], q.get("err", [""])[0])
@@ -2409,6 +2454,18 @@ class Handler(BaseHTTPRequestHandler):
                 store.set_kv("risk_overrides", "")
                 store.set_kv("signals_off", "")
                 self._to("/rules?msg=" + quote("已恢复内置默认")); return
+            if path == "/featlib/add":
+                kind = form.get("kind", "ip")
+                value = form.get("value", "").strip()
+                if kind in ("ip", "ua", "asn", "email") and value:
+                    store.add_signature(kind, value, form.get("note", ""))
+                    self._to("/featlib?msg=" + quote("已添加特征"))
+                else:
+                    self._to("/featlib?err=" + quote("类型或特征值无效"))
+                return
+            if path == "/featlib/delete":
+                store.delete_signature(int(form["id"]))
+                self._to("/featlib?msg=" + quote("已删除")); return
             if path == "/agent/logpath":
                 src = store.get_source(int(form["id"]))
                 if src:

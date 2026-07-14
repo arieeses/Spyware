@@ -24,6 +24,8 @@ class TokenFeatures:
     time_days: int = 0            # 拉取覆盖的不同天数
     up30: int = 0                 # 近30天上行字节
     down30: int = 0               # 近30天下行字节
+    feature_hit: bool = False     # 命中内鬼特征库
+    feature_reason: str = ""
     asn_type_counts: Dict[str, int] = field(default_factory=dict)
     hosting_ratio: float = 0.0
     self_ratio: float = 0.0
@@ -61,7 +63,7 @@ def build_features(token: str, pull_rows: List, user_row,
                    ipc: IpClassifier, uac: UaClassifier, bl: Blacklist = None,
                    ip_users: dict = None, window_hours: int = 24,
                    now: datetime = None, ip_panels: dict = None,
-                   email_panels: dict = None) -> TokenFeatures:
+                   email_panels: dict = None, featlib=None) -> TokenFeatures:
     f = TokenFeatures(token=token)
     f.pull_count = len(pull_rows)
 
@@ -156,5 +158,12 @@ def build_features(token: str, pull_rows: List, user_row,
             f.reg_to_first_pull_secs = (f.first_pull - f.created_at).total_seconds()
         if email_panels and f.email:
             f.email_panels = len(email_panels.get(f.email, set()))
+
+    # 内鬼特征库匹配(IP/UA/ASN/邮箱); 无拉取时也能靠邮箱命中
+    if featlib is not None and not featlib.empty:
+        reason = featlib.match(ips, uas, f.email, getattr(ipc, "asndb", None))
+        if reason:
+            f.feature_hit = True
+            f.feature_reason = reason
 
     return f
