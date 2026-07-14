@@ -127,6 +127,18 @@ CREATE TABLE IF NOT EXISTS signatures (
   created_at TEXT
 );
 
+-- 本地每日流量(同步 v2board 时一并拉入 v2_stat_user): 详情页流量记录直接读本地, 也供流量对称分析
+CREATE TABLE IF NOT EXISTS traffic_daily (
+  token TEXT,
+  panel TEXT,
+  day   INTEGER,   -- 当天 unix 时间戳
+  u     INTEGER,
+  d     INTEGER,
+  rate  REAL,
+  PRIMARY KEY (token, day)
+);
+CREATE INDEX IF NOT EXISTS idx_traffic_token ON traffic_daily(token);
+
 -- 内鬼库: 一键移入的已确认内鬼账号(快照其IP/UA/ASN/邮箱, 继续反哺检测); 移入后不再进风险名单
 CREATE TABLE IF NOT EXISTS insiders (
   token      TEXT PRIMARY KEY,
@@ -543,6 +555,38 @@ class Store:
             cur.execute("UPDATE users SET up30=?, down30=? WHERE panel=? AND user_id=?",
                         (int(u30 or 0), int(d30 or 0), panel, uid))
         self.conn.commit()
+
+    # —— 本地每日流量 ——
+    def tokens_by_uid(self, panel: str) -> dict:
+        rows = self.conn.execute(
+            "SELECT user_id, token FROM users WHERE panel=? AND user_id IS NOT NULL",
+            (panel,)).fetchall()
+        return {r["user_id"]: r["token"] for r in rows}
+
+    def clear_traffic_daily(self, panel: str) -> None:
+        self.conn.execute("DELETE FROM traffic_daily WHERE panel=?", (panel,))
+        self.conn.commit()
+
+    def add_traffic_daily(self, rows) -> None:
+        """rows=(token, panel, day, u, d, rate) 列表; 批量写入。"""
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO traffic_daily(token, panel, day, u, d, rate) "
+            "VALUES(?,?,?,?,?,?)", rows)
+        self.conn.commit()
+
+    def refresh_traffic30(self, panel: str, since30: int) -> None:
+        """从本地每日流量重算近30天上下行, 写回 users.up30/down30。"""
+        self.conn.execute(
+            "UPDATE users SET "
+            "up30=COALESCE((SELECT SUM(u) FROM traffic_daily t WHERE t.token=users.token AND t.day>=?),0), "
+            "down30=COALESCE((SELECT SUM(d) FROM traffic_daily t WHERE t.token=users.token AND t.day>=?),0) "
+            "WHERE panel=?", (since30, since30, panel))
+        self.conn.commit()
+
+    def traffic_daily_for(self, token: str):
+        return self.conn.execute(
+            "SELECT day, u, d, rate FROM traffic_daily WHERE token=? ORDER BY day DESC",
+            (token,)).fetchall()
 
     def update_source_config(self, sid: int, config: str) -> None:
         self.conn.execute("UPDATE sources SET config=? WHERE id=?", (config, sid))

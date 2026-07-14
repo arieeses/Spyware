@@ -105,26 +105,45 @@ class V2BoardConnector:
             conn.close()
         return n
 
-    def sync_traffic30(self, store: Store, panel: str = None, days: int = 30) -> int:
-        """从 v2_stat_user 汇总近 days 天每用户上下行, 写入本地 up30/down30。返回覆盖用户数。
-        v2_stat_user: user_id / u / d / record_type('d'=按天) / record_at(unix)。失败静默(不影响同步)。"""
+    def sync_traffic_daily(self, store: Store, panel: str = None, days: int = 90) -> int:
+        """从 v2_stat_user 拉近 days 天每日上下行, 存入本地 traffic_daily(详情页流量记录直接读本地),
+        并据此重算 users.up30/down30(供流量对称分析)。流式读, 不一次性载入内存。返回写入行数。"""
         import time as _t
         prefix = self.cfg.get("prefix", "v2_")
-        since = int(_t.time()) - days * 86400
-        conn = self._connect(read_timeout=60)
-        by_uid = {}
+        now = int(_t.time())
+        since = now - days * 86400
+        since30 = now - 30 * 86400
+        uid2tok = store.tokens_by_uid(panel)
+        if not uid2tok:
+            return 0
+        conn = self._connect(read_timeout=120)
+        n = 0
+        buf = []
         try:
+            store.clear_traffic_daily(panel)
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT user_id, SUM(u) u30, SUM(d) d30 FROM {prefix}stat_user "
-                    f"WHERE record_type='d' AND record_at>=%s GROUP BY user_id", (since,))
-                for row in cur.fetchall():
-                    by_uid[row["user_id"]] = (row.get("u30") or 0, row.get("d30") or 0)
+                    f"SELECT user_id, record_at, SUM(u) u, SUM(d) d, MAX(server_rate) rate "
+                    f"FROM {prefix}stat_user WHERE record_type='d' AND record_at>=%s "
+                    f"GROUP BY user_id, record_at", (since,))
+                while True:
+                    batch = cur.fetchmany(3000)
+                    if not batch:
+                        break
+                    for r in batch:
+                        tok = uid2tok.get(r["user_id"])
+                        if not tok:
+                            continue
+                        buf.append((tok, panel, int(r["record_at"] or 0),
+                                    int(r["u"] or 0), int(r["d"] or 0), float(r["rate"] or 1)))
+                    if len(buf) >= 5000:
+                        store.add_traffic_daily(buf); n += len(buf); buf = []
+                if buf:
+                    store.add_traffic_daily(buf); n += len(buf)
         finally:
             conn.close()
-        if by_uid:
-            store.update_traffic30(panel, by_uid)
-        return len(by_uid)
+        store.refresh_traffic30(panel, since30)
+        return n
 
     _ORDER_STATUS = {0: "待支付", 1: "开通中", 2: "已取消", 3: "已完成", 4: "已折抵"}
 

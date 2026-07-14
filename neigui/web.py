@@ -2252,22 +2252,30 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     page = 1
                 out = {"rows": [], "total": 0}
-                user = store.user(tok)
-                if user and user["user_id"] and "panel" in user.keys() and user["panel"]:
-                    src = next((s for s in store.list_sources()
-                                if s["type"] == "v2board" and s["name"] == user["panel"]), None)
-                    if src:
-                        try:
-                            from .connectors.v2board import V2BoardConnector
-                            conn = V2BoardConnector(json.loads(src["config"] or "{}"))
-                            rows = conn.query_traffic(user["user_id"], days=90)
-                            out = {"rows": rows, "total": len(rows)}
-                        except Exception as e:  # noqa: BLE001
-                            out = {"error": f"流量查询失败: {e}"}
-                    else:
-                        out = {"error": "该机场未接入 v2board 数据库"}
+                # 优先读本地(同步时已拉入); 本地没有再回退实时查远程
+                local = store.traffic_daily_for(tok)
+                if local:
+                    rows = [{"date": datetime.utcfromtimestamp(r["day"]).strftime("%Y-%m-%d"),
+                             "up": _human_bytes(r["u"]), "down": _human_bytes(r["d"]),
+                             "rate": f'{float(r["rate"] or 1):.2f}'} for r in local]
+                    out = {"rows": rows, "total": len(rows)}
                 else:
-                    out = {"error": "无该用户的机场/用户ID, 无法查流量"}
+                    user = store.user(tok)
+                    if user and user["user_id"] and "panel" in user.keys() and user["panel"]:
+                        src = next((s for s in store.list_sources()
+                                    if s["type"] == "v2board" and s["name"] == user["panel"]), None)
+                        if src:
+                            try:
+                                from .connectors.v2board import V2BoardConnector
+                                conn = V2BoardConnector(json.loads(src["config"] or "{}"))
+                                rows = conn.query_traffic(user["user_id"], days=90)
+                                out = {"rows": rows, "total": len(rows), "live": True}
+                            except Exception as e:  # noqa: BLE001
+                                out = {"error": f"流量查询失败: {e}"}
+                        else:
+                            out = {"error": "该机场未接入 v2board 数据库"}
+                    else:
+                        out = {"error": "该用户暂无本地流量, 同步 v2board 后可见"}
                 self._send(json.dumps(out, ensure_ascii=False).encode(),
                            "application/json; charset=utf-8")
                 return

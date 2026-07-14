@@ -93,7 +93,7 @@ def sync_v2board(store: Store, cfg: dict, panel: str = None):
     if paid_only:
         store.purge_unpaid_users(panel)   # 顺带清掉本地已同步的"从未购买"用户
     try:
-        conn.sync_traffic30(store, panel)   # 近30天上下行, 供「流量对称」信号; 失败不影响
+        conn.sync_traffic_daily(store, panel)   # 每日流量入本地(供详情页+流量对称); 失败不影响
     except Exception:  # noqa: BLE001
         pass
     try:
