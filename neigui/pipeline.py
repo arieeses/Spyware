@@ -30,15 +30,21 @@ def _disabled_signals(store) -> set:
 
 
 def analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
+    from datetime import datetime, timedelta, timezone
     ipc = IpClassifier()
     uac = UaClassifier()
     bl = Blacklist()
     off = _disabled_signals(store)
+    win_h = cfg.thresholds.online_window_hours
+    now = datetime.now(timezone.utc)
+    since_iso = (now - timedelta(hours=max(1, win_h))).isoformat()
+    ip_users = store.ip_user_counts(since_iso)   # 窗口内 IP→不同账号数
     results: List[RiskResult] = []
     pull_tokens = set(store.tokens())
     # 有拉取行为的用户: 正常评分
     for token in pull_tokens:
-        feats = build_features(token, store.pulls_for(token), store.user(token), ipc, uac, bl)
+        feats = build_features(token, store.pulls_for(token), store.user(token), ipc, uac, bl,
+                               ip_users=ip_users, window_hours=win_h, now=now)
         results.append(score_token(feats, cfg, off))
     # 同步来但暂无拉取日志的用户: 显示为"正常/待评估"(拉取0), 便于查看/搜索
     for u in store.all_users():
@@ -63,9 +69,14 @@ def decide(store: Store, token: str, cfg: Config = CONFIG) -> dict:
     """给订阅网关用: 返回某 token 的处置池。
     pool: normal(真实节点) / limited(限速节点) / isolated(隔离/特定IP节点)。
     """
+    from datetime import datetime, timedelta, timezone
     pulls = store.pulls_for(token)
     user = store.user(token)
-    feats = build_features(token, pulls, user, IpClassifier(), UaClassifier(), Blacklist())
+    win_h = cfg.thresholds.online_window_hours
+    now = datetime.now(timezone.utc)
+    since_iso = (now - timedelta(hours=max(1, win_h))).isoformat()
+    feats = build_features(token, pulls, user, IpClassifier(), UaClassifier(), Blacklist(),
+                           ip_users=store.ip_user_counts(since_iso), window_hours=win_h, now=now)
     r = score_token(feats, cfg, _disabled_signals(store))
     # 分级 → (处置池, 入口域名 key, 等级名)
     if feats.blacklist_hit:

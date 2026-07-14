@@ -163,6 +163,17 @@ class Store:
             row = self.conn.execute("SELECT COUNT(*) FROM pulls").fetchone()
         return row[0] if row else 0
 
+    def ip_user_counts(self, since_iso: Optional[str] = None) -> dict:
+        """每个 IP 被多少个不同账号(token)使用。since_iso 限定时间窗口(在线判定)。
+        返回 {ip: distinct_token_count}, 供「IP共用账号」信号用。"""
+        sql = "SELECT ip, COUNT(DISTINCT token) c FROM pulls"
+        args: list = []
+        if since_iso:
+            sql += " WHERE ts>=?"
+            args.append(since_iso)
+        sql += " GROUP BY ip"
+        return {r["ip"]: r["c"] for r in self.conn.execute(sql, args).fetchall() if r["ip"]}
+
     def pull_srcs(self):
         """日志库里出现过的来源名(去重), 用于分类子标签。"""
         rows = self.conn.execute(

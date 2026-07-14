@@ -38,6 +38,9 @@ class Weights:
     pull_regularity: float = 10.0    # 机器般规整拉取
     traffic_divergence: float = 30.0 # 拉取活跃却零流量(抗伪装)
     reg_trajectory: float = 15.0     # 注册即拉取且无流量(新号侦察)
+    multi_ua: float = 12.0           # 单 token 用多个不同客户端UA(共享/轮换)
+    online_ips: float = 18.0         # 单 token 近期在多个IP在线(分发/扫描)
+    ip_shared: float = 22.0          # 该 token 的IP被多个账号共用(聚合点/攻击机)
     blacklist_hit: float = 60.0      # 命中黑名单(IP/UA/ASN, 强, 直接判高危)
     # —— 节点侧信号(需节点日志, 增量5接入, 暂占位) ——
     ip_silence: float = 25.0
@@ -62,6 +65,14 @@ class Thresholds:
     new_account_days: int = 7
     # 排除层: 自有IP占比达此比例即排除
     self_exclude_ratio: float = 0.99
+    # 在线/近期活跃窗口(小时)——「在线IP」「IP共用账号」按此窗口统计
+    online_window_hours: int = 24
+    # 多UA: 一个 token 用过的不同 UA 数达此值即判「多UA」
+    multi_ua_min: int = 4
+    # 在线IP: 一个 token 近期活跃 IP 数达此值即判「多IP在线」
+    online_ips_min: int = 6
+    # IP共用: 该 token 的某个IP被这么多不同账号共用即判「IP共用」
+    ip_shared_min: int = 3
 
 
 @dataclass

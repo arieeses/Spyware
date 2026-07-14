@@ -31,6 +31,9 @@ class RiskResult:
     panel: Optional[str] = None
     plan: Optional[str] = None
     distinct_ips: int = 0
+    distinct_uas: int = 0
+    online_ips: int = 0
+    ip_shared_users: int = 0
     pull_count: int = 0
     last_pull: Optional[datetime] = None
     traffic_bytes: int = 0
@@ -54,7 +57,9 @@ def _level(score: float, th) -> str:
 
 def _display(f: TokenFeatures) -> dict:
     return dict(email=f.email, user_id=f.user_id, panel=f.panel, plan=f.plan,
-                distinct_ips=f.distinct_ips, pull_count=f.pull_count, last_pull=f.last_pull,
+                distinct_ips=f.distinct_ips, distinct_uas=f.distinct_uas,
+                online_ips=f.online_ips, ip_shared_users=f.ip_shared_users,
+                pull_count=f.pull_count, last_pull=f.last_pull,
                 traffic_bytes=f.traffic_bytes, created_at=f.created_at, expired_at=f.expired_at)
 
 
@@ -116,6 +121,23 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
         signals.append(Signal("注册即侦察", w.reg_trajectory,
             f"注册后 {f.reg_to_first_pull_secs / 60:.0f} 分钟内即拉取且几乎无流量, "
             "疑似注册就为拿节点清单", tag="注册侦察"))
+
+    # 7. 多UA(一个 token 用了多个不同客户端, 共享/轮换嫌疑)
+    if on("multi_ua") and f.distinct_uas >= th.multi_ua_min:
+        signals.append(Signal("多客户端UA", w.multi_ua,
+            f"该 token 用过 {f.distinct_uas} 个不同 UA, 疑似多人共享或工具轮换", tag="多UA"))
+
+    # 8. 多IP在线(近期活跃窗口内在多个 IP 出现, 分发/扫描)
+    if on("online_ips") and f.online_ips >= th.online_ips_min:
+        signals.append(Signal("多IP在线", w.online_ips,
+            f"近 {th.online_window_hours}h 在 {f.online_ips} 个不同 IP 活跃, 疑似分发或分布式扫描",
+            tag="多IP在线"))
+
+    # 9. IP共用账号(该 token 的 IP 被多个账号共用, 聚合点/攻击机)
+    if on("ip_shared") and f.ip_shared_users >= th.ip_shared_min:
+        signals.append(Signal("IP共用账号", w.ip_shared,
+            f"该 token 的某个 IP 同时被 {f.ip_shared_users} 个账号使用, 疑似聚合点/攻击机",
+            tag="IP共用"))
 
     # —— 节点侧信号(ip_silence / scan_pattern / tls_mismatch)需节点日志, 增量5接入 ——
 

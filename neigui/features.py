@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from .enrich import Blacklist, IpClassifier, UaClassifier
@@ -14,6 +14,9 @@ class TokenFeatures:
     token: str
     pull_count: int = 0
     distinct_ips: int = 0
+    distinct_uas: int = 0         # 用过多少个不同 UA(共享/轮换嫌疑)
+    online_ips: int = 0           # 近期活跃窗口内的不同 IP 数(在线IP)
+    ip_shared_users: int = 0      # 该 token 的IP中, 被最多账号共用的那个的账号数
     asn_type_counts: Dict[str, int] = field(default_factory=dict)
     hosting_ratio: float = 0.0
     self_ratio: float = 0.0
@@ -48,18 +51,27 @@ def _parse_dt(s) -> Optional[datetime]:
 
 
 def build_features(token: str, pull_rows: List, user_row,
-                   ipc: IpClassifier, uac: UaClassifier, bl: Blacklist = None) -> TokenFeatures:
+                   ipc: IpClassifier, uac: UaClassifier, bl: Blacklist = None,
+                   ip_users: dict = None, window_hours: int = 24,
+                   now: datetime = None) -> TokenFeatures:
     f = TokenFeatures(token=token)
     f.pull_count = len(pull_rows)
 
     ips = set()
+    uas = set()
+    recent_ips = set()
     type_counts: Dict[str, int] = {}
     tool = client = 0
     times: List[datetime] = []
+    if now is None:
+        now = datetime.now(timezone.utc)
+    win_start = now - timedelta(hours=max(1, window_hours))
 
     for r in pull_rows:
         ip = r["ip"]
         ips.add(ip)
+        if r["ua"]:
+            uas.add(r["ua"])
         t = ipc.classify(ip)
         type_counts[t] = type_counts.get(t, 0) + 1
         ui = uac.classify(r["ua"])
@@ -79,9 +91,16 @@ def build_features(token: str, pull_rows: List, user_row,
         dt = _parse_dt(r["ts"])
         if dt:
             times.append(dt)
+            if dt >= win_start and ip:
+                recent_ips.add(ip)
 
     n = max(f.pull_count, 1)
     f.distinct_ips = len(ips)
+    f.distinct_uas = len(uas)
+    f.online_ips = len(recent_ips)
+    # 该 token 近期在线 IP 中, 被最多其他账号共用的那个的账号数
+    if ip_users and recent_ips:
+        f.ip_shared_users = max((ip_users.get(ip, 1) for ip in recent_ips), default=0)
     f.asn_type_counts = type_counts
     f.hosting_ratio = type_counts.get("hosting", 0) / n
     f.self_ratio = type_counts.get("self", 0) / n

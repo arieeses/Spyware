@@ -206,9 +206,10 @@ def _pager_html(path, base, size, page, pages, sizes):
 
 
 RISK_COLS = [("uid", "用户ID"), ("email", "邮箱"), ("panel", "机场"), ("token", "Token"),
-             ("ips", "IP数"), ("pull", "拉取"), ("score", "风险分"), ("level", "风险等级"),
+             ("ips", "IP数"), ("online", "在线IP"), ("uas", "UA数"), ("shared", "共用账号"),
+             ("pull", "拉取"), ("score", "风险分"), ("level", "风险等级"),
              ("tags", "风险标签"), ("created", "注册时间"), ("expired", "到期时间"), ("last", "最后活跃")]
-_NUM_COLS = {"uid", "ips", "pull", "score"}
+_NUM_COLS = {"uid", "ips", "online", "uas", "shared", "pull", "score"}
 _DASH = '<span class="dim">—</span>'
 
 
@@ -234,7 +235,12 @@ def _user_detail(store, tok: str) -> dict:
     pulls = list(store.pulls_for(tok))
     if not user and not pulls:
         return {"error": "未找到该用户"}
-    r = score_token(build_features(tok, pulls, user, IpClassifier(), UaClassifier(), Blacklist()),
+    from datetime import timedelta, timezone
+    win_h = CONFIG.thresholds.online_window_hours
+    _now = datetime.now(timezone.utc)
+    _since = (_now - timedelta(hours=max(1, win_h))).isoformat()
+    r = score_token(build_features(tok, pulls, user, IpClassifier(), UaClassifier(), Blacklist(),
+                                   ip_users=store.ip_user_counts(_since), window_hours=win_h, now=_now),
                     CONFIG, _disabled_signals(store))
     plan = user["plan"] if user and "plan" in user.keys() else None
     has_plan = bool(plan and str(plan) not in ("", "0", "None"))
@@ -253,6 +259,8 @@ def _user_detail(store, tok: str) -> dict:
         "traffic": _human_bytes(r.traffic_bytes), "score": r.score, "level": r.level,
         "signals": [s.name for s in r.signals],
         "pull_count": r.pull_count, "distinct_ips": r.distinct_ips,
+        "distinct_uas": r.distinct_uas, "online_ips": r.online_ips,
+        "ip_shared_users": r.ip_shared_users,
         "pulls": [{"ts": (p["ts"] or "")[:19].replace("T", " "), "ip": p["ip"],
                    "ua": (p["ua"] or "")[:30]} for p in pulls[-15:][::-1]],
     }
@@ -841,6 +849,9 @@ WEIGHT_CN = {
     "pull_regularity": ("机器规整拉取", "拉取间隔过于规整, 呈自动化定时特征"),
     "traffic_divergence": ("流量背离", "持续拉取却几乎零流量, 只拿节点不使用"),
     "reg_trajectory": ("注册即侦察", "注册后立即拉取且无流量, 疑似注册就为拿节点"),
+    "multi_ua": ("多客户端UA", "一个 token 用了多个不同 UA, 疑似多人共享/工具轮换"),
+    "online_ips": ("多IP在线", "一个 token 近期在多个不同 IP 活跃, 疑似分发/分布式扫描"),
+    "ip_shared": ("IP共用账号", "该 token 的 IP 被多个账号共用, 疑似聚合点/攻击机"),
     "ip_silence": ("拉取后IP静默", "拉取IP 拉完就不通/从不连节点(需节点侧日志)"),
     "scan_pattern": ("扫描式短连", "遍历所有节点每个只碰一次(需节点侧日志)"),
     "tls_mismatch": ("TLS指纹矛盾", "UA 与 TLS/JA3 指纹不符(需 JA3 模块)"),
@@ -851,6 +862,9 @@ THRESH_CN = {
     "regular_cv": "规整判定-间隔变异系数上限", "regular_min_pulls": "规整判定-最少拉取次数",
     "reg_immediate_secs": "注册即拉-秒内算立即", "new_account_days": "新号判定-账龄天数",
     "self_exclude_ratio": "自有IP排除-占比阈值",
+    "online_window_hours": "在线窗口(小时)-在线IP/共用账号按此统计",
+    "multi_ua_min": "多UA判定-不同UA数下限", "online_ips_min": "多IP在线判定-在线IP数下限",
+    "ip_shared_min": "IP共用判定-共用账号数下限",
 }
 
 
@@ -1209,6 +1223,10 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
             "panel": f'<td class="small">{esc(r.panel or "-")}</td>',
             "token": f'<td class="mono small dim">{esc(r.token[:12])}</td>',
             "ips": f'<td class="num">{r.distinct_ips}</td>',
+            "online": f'<td class="num">{r.online_ips or _DASH}</td>',
+            "uas": f'<td class="num">{r.distinct_uas or _DASH}</td>',
+            "shared": (f'<td class="num" style="color:#e5484d;font-weight:600">{r.ip_shared_users}</td>'
+                       if r.ip_shared_users >= 2 else f'<td class="num">{r.ip_shared_users or _DASH}</td>'),
             "pull": f'<td class="num">{r.pull_count}</td>',
             "score": (f'<td class="num" data-sort="{r.score}">'
                       f'<div class="scorebar"><div class="fill" style="width:{min(100, int(r.score))}%;background:{color}"></div></div>'
@@ -1657,7 +1675,9 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
       h+='</table>';
       h+='<h4>风险</h4><table><tr><td>风险分</td><td>'+esc0(d.score)+' ('+esc0(d.level)+')</td></tr>';
       h+='<tr><td>命中信号</td><td>'+(d.signals&&d.signals.length?esc0(d.signals.join(' / ')):'无')+'</td></tr>';
-      h+='<tr><td>拉取/IP</td><td>'+esc0(d.pull_count)+' 次 / '+esc0(d.distinct_ips)+' IP</td></tr></table>';
+      h+='<tr><td>拉取/IP</td><td>'+esc0(d.pull_count)+' 次 / '+esc0(d.distinct_ips)+' IP</td></tr>';
+      h+='<tr><td>在线IP / UA数</td><td>'+esc0(d.online_ips)+' 个在线 / '+esc0(d.distinct_uas)+' 个UA</td></tr>';
+      h+='<tr><td>IP共用账号</td><td>'+(d.ip_shared_users>=2?'<span style="color:#e5484d;font-weight:600">'+esc0(d.ip_shared_users)+' 个账号共用同一IP</span>':esc0(d.ip_shared_users)+' 个')+'</td></tr></table>';
       h+='<h4>最近拉取记录</h4>';
       if(d.pulls&&d.pulls.length){{h+='<table>';d.pulls.forEach(function(p){{h+='<tr><td>'+esc0(p.ts)+'</td><td>'+esc0(p.ip)+' · '+esc0(p.ua)+'</td></tr>';}});h+='</table>';}}
       else h+='<div class="dim">暂无拉取记录(未接入订阅日志)</div>';
