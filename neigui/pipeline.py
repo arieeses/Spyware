@@ -68,21 +68,14 @@ def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
         feats = build_features(token, store.pulls_for(token), store.user(token), ipc, uac, bl,
                                ip_users=ip_users, window_hours=win_h, now=now)
         results.append(score_token(feats, cfg, off))
-    # 同步来但暂无拉取日志的用户: 显示为"正常/待评估"(拉取0), 便于查看/搜索
+    # 同步来但暂无拉取日志的用户: 仍按"画像信号"评分(如「有效期内零流量新号」重点排查),
+    # 无拉取所以 IP/UA/ASN 等日志类信号不触发。空拉取的 build_features 很轻。
     for u in store.all_users():
         if u["token"] in pull_tokens:
             continue
-        cols = u.keys()
-        results.append(RiskResult(
-            u["token"], 0.0, "正常", excluded=False,
-            email=(u["email"] if "email" in cols else None),
-            user_id=(u["user_id"] if "user_id" in cols else None),
-            panel=(u["panel"] if "panel" in cols else None),
-            plan=(u["plan"] if "plan" in cols else None),
-            traffic_bytes=(u["traffic_bytes"] or 0) if "traffic_bytes" in cols else 0,
-            created_at=_pdt(u["created_at"]) if "created_at" in cols else None,
-            expired_at=_pdt(u["expired_at"]) if "expired_at" in cols else None,
-        ))
+        feats = build_features(u["token"], [], u, ipc, uac, bl,
+                               ip_users=ip_users, window_hours=win_h, now=now)
+        results.append(score_token(feats, cfg, off))
     results.sort(key=lambda r: r.score, reverse=True)
     return results
 

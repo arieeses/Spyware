@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from .config import CONFIG, Config
@@ -138,6 +138,17 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
         signals.append(Signal("IP共用账号", w.ip_shared,
             f"该 token 的某个 IP 同时被 {f.ip_shared_users} 个账号使用, 疑似聚合点/攻击机",
             tag="IP共用"))
+
+    # 10. 重点排查: 新号(reg_year_from 年后注册)+ 订阅有效期内 + 流量<阈值(付费却几乎不用)
+    if on("active_lowtraffic") and f.created_at and f.expired_at:
+        exp = f.expired_at if f.expired_at.tzinfo else f.expired_at.replace(tzinfo=timezone.utc)
+        if (f.created_at.year >= th.reg_year_from and exp > datetime.now(timezone.utc)
+                and f.traffic_bytes < th.active_lowtraffic_max_bytes):
+            mb = th.active_lowtraffic_max_bytes / 1048576
+            signals.append(Signal("有效期内零流量新号", w.active_lowtraffic,
+                f"{th.reg_year_from}年后注册, 订阅在有效期内却仅用 "
+                f"{f.traffic_bytes / 1048576:.2f}MB(<{mb:.0f}MB), 疑似只拉节点不使用",
+                tag="重点排查"))
 
     # —— 节点侧信号(ip_silence / scan_pattern / tls_mismatch)需节点日志, 增量5接入 ——
 
