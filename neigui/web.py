@@ -300,17 +300,6 @@ def _user_detail(store, tok: str) -> dict:
                    "asn": _ip_asn_label(_ipc0, p["ip"]),
                    "ua": (p["ua"] or "")[:30]} for p in pulls[-15:][::-1]],
     }
-    orders, omsg = [], "无订单记录"
-    if r.panel and r.user_id:
-        src = next((s for s in store.list_sources()
-                    if s["type"] == "v2board" and s["name"] == r.panel), None)
-        if src:
-            try:
-                from .connectors.v2board import V2BoardConnector
-                orders = V2BoardConnector(json.loads(src["config"] or "{}")).query_orders(r.user_id)
-            except Exception as e:  # noqa: BLE001
-                omsg = f"订单查询失败: {e}"
-    d["orders"], d["orders_msg"] = orders, omsg
     return d
 
 
@@ -1527,10 +1516,14 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         <button class="btn sm ghost" type="button" style="margin-left:auto" onclick="closeM('sameIpModal')">关闭</button></div>
       <div id="sameIpBody" class="udetail"><div class="dim">加载中…</div></div>
     </div></div>
-    <div class="modal-bg" id="userModal"><div class="modal" style="width:min(560px,94vw)">
-      <div style="display:flex;align-items:center"><h3 style="margin:0">用户详情</h3>
-        <button class="btn sm ghost" type="button" style="margin-left:auto" onclick="closeM('userModal')">关闭</button></div>
+    <div class="modal-bg" id="userModal"><div class="modal" style="width:min(720px,95vw);position:relative">
+      <button class="modalx" type="button" onclick="closeM('userModal')" aria-label="关闭">×</button>
       <div id="userBody" class="udetail"><div class="dim">加载中…</div></div>
+    </div></div>
+    <div class="modal-bg" id="trafficModal"><div class="modal" style="width:min(640px,95vw);position:relative">
+      <button class="modalx" type="button" onclick="closeM('trafficModal')" aria-label="关闭">×</button>
+      <h4 style="margin:0 0 10px">流量记录</h4>
+      <div id="trafficBody"><div class="dim">加载中…</div></div>
     </div></div>"""
 
 
@@ -1794,6 +1787,14 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .udetail table {{ width:100%; border-collapse:collapse; }}
   .udetail td {{ padding:5px 8px; border-bottom:1px solid var(--line); }}
   .udetail td:first-child {{ color:var(--dim); width:96px; }}
+  .udgrid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px 22px; }}
+  .udkv {{ display:flex; gap:10px; padding:5px 0; border-bottom:1px solid var(--line); min-width:0; }}
+  .udk {{ color:var(--dim); flex:0 0 64px; }}
+  .udv {{ min-width:0; word-break:break-all; }}
+  .modalx {{ position:absolute; top:10px; right:12px; width:30px; height:30px; border:0; background:transparent;
+    font-size:22px; line-height:1; color:#98a0ab; cursor:pointer; border-radius:6px; }}
+  .modalx:hover {{ background:#eceff3; color:#333; }}
+  @media (max-width:560px) {{ .udgrid {{ grid-template-columns:1fr; }} }}
   .pager {{ display:flex; gap:4px; align-items:center; justify-content:flex-end; margin-top:14px; flex-wrap:wrap; }}
   .pg {{ min-width:30px; height:30px; padding:0 8px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:6px; text-decoration:none; color:var(--txt); font-size:13px; }}
   .pg:hover {{ border-color:var(--pri); }}
@@ -1924,35 +1925,51 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
       document.getElementById('sameIpBody').innerHTML=h;
     }});
   }}
+  function udkv(k,v){{return '<div class="udkv"><span class="udk">'+k+'</span><span class="udv">'+v+'</span></div>';}}
   function userDetail(tok){{
     openM('userModal');
     document.getElementById('userBody').innerHTML='<div class="dim">加载中…</div>';
     fetch('/api/user?token='+encodeURIComponent(tok)).then(function(r){{return r.json();}}).then(function(d){{
       if(d.error){{document.getElementById('userBody').innerHTML='<div class="dim">'+esc0(d.error)+'</div>';return;}}
-      var h='<h4>账号信息</h4><table>';
-      h+='<tr><td>邮箱</td><td>'+esc0(d.email)+'</td></tr>';
-      h+='<tr><td>用户ID</td><td>'+esc0(d.user_id)+'</td></tr>';
-      h+='<tr><td>机场</td><td>'+esc0(d.panel)+'</td></tr>';
-      h+='<tr><td>套餐</td><td>'+esc0(d.plan||'未购买')+'</td></tr>';
-      h+='<tr><td>注册时间</td><td>'+esc0(d.created_at)+'</td></tr>';
-      h+='<tr><td>到期时间</td><td>'+esc0(d.expired)+'</td></tr>';
-      h+='<tr><td>状态</td><td>'+(d.banned?'<span style="color:#e5484d">已封禁</span>':'正常')+'</td></tr>';
-      h+='<tr><td>Token</td><td style="font-family:monospace;word-break:break-all">'+esc0(d.token)+'</td></tr>';
-      h+='<tr><td>已用流量</td><td>'+esc0(d.traffic)+'</td></tr>';
-      h+='</table>';
-      h+='<h4>风险</h4><table><tr><td>风险分</td><td>'+esc0(d.score)+' ('+esc0(d.level)+')</td></tr>';
-      h+='<tr><td>命中信号</td><td>'+(d.signals&&d.signals.length?esc0(d.signals.join(' / ')):'无')+'</td></tr>';
-      h+='<tr><td>拉取/IP</td><td>'+esc0(d.pull_count)+' 次 / '+esc0(d.distinct_ips)+' IP</td></tr>';
-      h+='<tr><td>在线IP / UA数</td><td>'+esc0(d.online_ips)+' 个在线 / '+esc0(d.distinct_uas)+' 个UA</td></tr>';
-      h+='<tr><td>IP共用账号</td><td>'+(d.ip_shared_users>=2?'<span style="color:#e5484d;font-weight:600">'+esc0(d.ip_shared_users)+' 个账号共用同一IP</span>':esc0(d.ip_shared_users)+' 个')+'</td></tr></table>';
+      var h='<h4>账号信息</h4><div class="udgrid">';
+      h+=udkv('邮箱',esc0(d.email));
+      h+=udkv('套餐',esc0(d.plan||'未购买'));
+      h+=udkv('注册时间',esc0(d.created_at));
+      h+=udkv('到期时间',esc0(d.expired));
+      h+=udkv('状态',(d.banned?'<span style="color:#e5484d">已封禁</span>':'正常'));
+      h+=udkv('流量','<a href="#" onclick="trafficRecords(\\''+esc0(d.token)+'\\',1);return false" style="color:#5b8def">流量记录 ›</a>');
+      h+='</div>';
+      h+='<h4>风险</h4><div class="udgrid">';
+      h+=udkv('风险分',esc0(d.score)+' ('+esc0(d.level)+')');
+      h+=udkv('拉取/IP',esc0(d.pull_count)+' 次 / '+esc0(d.distinct_ips)+' IP');
+      h+=udkv('在线IP/UA',esc0(d.online_ips)+' / '+esc0(d.distinct_uas));
+      h+=udkv('IP共用',(d.ip_shared_users>=2?'<span style="color:#e5484d;font-weight:600">'+esc0(d.ip_shared_users)+' 个共用</span>':esc0(d.ip_shared_users)+' 个'));
+      h+='</div>';
+      h+='<div class="udkv" style="margin-top:6px"><span class="udk">命中信号</span><span class="udv">'+(d.signals&&d.signals.length?esc0(d.signals.join(' / ')):'无')+'</span></div>';
       h+='<h4>最近拉取记录</h4>';
       if(d.pulls&&d.pulls.length){{h+='<table>';d.pulls.forEach(function(p){{h+='<tr><td>'+esc0(p.ts)+'</td><td>'+esc0(p.ip)+(p.asn?' <span class="dim">['+esc0(p.asn)+']</span>':'')+' · '+esc0(p.ua)+'</td></tr>';}});h+='</table>';}}
       else h+='<div class="dim">暂无拉取记录(未接入订阅日志)</div>';
-      h+='<h4>订单记录</h4>';
-      if(d.orders&&d.orders.length){{h+='<table>';d.orders.forEach(function(o){{h+='<tr><td>'+esc0(o.created_at)+'</td><td>￥'+esc0(o.amount)+' · '+esc0(o.status)+'</td></tr>';}});h+='</table>';}}
-      else h+='<div class="dim">'+esc0(d.orders_msg||'无订单记录')+'</div>';
       document.getElementById('userBody').innerHTML=h;
     }}).catch(function(){{document.getElementById('userBody').innerHTML='<div class="dim">加载失败</div>';}});
+  }}
+  function trafficRecords(tok,page){{
+    openM('trafficModal');
+    document.getElementById('trafficBody').innerHTML='<div class="dim">加载中…</div>';
+    fetch('/api/traffic?token='+encodeURIComponent(tok)+'&page='+page).then(function(r){{return r.json();}}).then(function(d){{
+      if(d.error){{document.getElementById('trafficBody').innerHTML='<div class="dim">'+esc0(d.error)+'</div>';return;}}
+      var h='<div class="dim small" style="margin-bottom:6px">近三个月每日流量 · 共 '+esc0(d.total)+' 天</div>';
+      if(!d.rows||!d.rows.length){{h+='<div class="dim">无流量记录</div>';document.getElementById('trafficBody').innerHTML=h;return;}}
+      h+='<table class="grid"><thead><tr><th>日期</th><th>上行</th><th>下行</th><th>倍率</th></tr></thead><tbody>';
+      d.rows.forEach(function(x){{h+='<tr><td>'+esc0(x.date)+'</td><td>'+esc0(x.up)+'</td><td>'+esc0(x.down)+'</td><td>'+esc0(x.rate)+'</td></tr>';}});
+      h+='</tbody></table>';
+      var pages=Math.max(1,Math.ceil(d.total/10));
+      h+='<div class="pager" style="margin-top:10px">';
+      h+=(page>1?'<a class="pg" href="#" onclick="trafficRecords(\\''+esc0(tok)+'\\','+(page-1)+');return false">‹</a>':'<span class="pg dis">‹</span>');
+      h+='<span class="pg cur">'+page+'</span> / '+pages;
+      h+=(page<pages?'<a class="pg" href="#" onclick="trafficRecords(\\''+esc0(tok)+'\\','+(page+1)+');return false">›</a>':'<span class="pg dis">›</span>');
+      h+='</div>';
+      document.getElementById('trafficBody').innerHTML=h;
+    }}).catch(function(){{document.getElementById('trafficBody').innerHTML='<div class="dim">加载失败</div>';}});
   }}
   function cpAgent(t){{
     var c='curl -fsSL "'+location.origin+'/agent/install.sh?token='+t+'" | bash';
@@ -2213,6 +2230,34 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/user":
                 self._send(json.dumps(_user_detail(store, q.get("token", [""])[0]),
                                       ensure_ascii=False).encode(), "application/json; charset=utf-8")
+                return
+
+            if path == "/api/traffic":
+                tok = q.get("token", [""])[0]
+                try:
+                    page = max(1, int(q.get("page", ["1"])[0]))
+                except ValueError:
+                    page = 1
+                out = {"rows": [], "total": 0}
+                user = store.user(tok)
+                if user and user["user_id"] and "panel" in user.keys() and user["panel"]:
+                    src = next((s for s in store.list_sources()
+                                if s["type"] == "v2board" and s["name"] == user["panel"]), None)
+                    if src:
+                        try:
+                            from .connectors.v2board import V2BoardConnector
+                            conn = V2BoardConnector(json.loads(src["config"] or "{}"))
+                            rows, total = conn.query_traffic(user["user_id"], days=90,
+                                                             limit=10, offset=(page - 1) * 10)
+                            out = {"rows": rows, "total": total}
+                        except Exception as e:  # noqa: BLE001
+                            out = {"error": f"流量查询失败: {e}"}
+                    else:
+                        out = {"error": "该机场未接入 v2board 数据库"}
+                else:
+                    out = {"error": "无该用户的机场/用户ID, 无法查流量"}
+                self._send(json.dumps(out, ensure_ascii=False).encode(),
+                           "application/json; charset=utf-8")
                 return
 
             if path not in VIEWS:
