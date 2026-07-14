@@ -1486,7 +1486,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     <div class="card">
       <div class="card-title" style="flex-wrap:wrap;gap:8px;font-weight:400">
         {searchbox}</div>
-      <div style="display:flex;gap:8px;margin-bottom:10px">
+      <div style="display:flex;gap:8px;margin-bottom:10px;justify-content:flex-end">
         <button class="btn sm" type="button" onclick="openM('colModal')">编辑标签</button>
         <button class="btn sm ghost" type="button" onclick="openM('exportModal')">⬇ 导出CSV</button>
       </div>
