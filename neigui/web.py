@@ -1427,14 +1427,15 @@ def auth_layout(title: str, body: str) -> str:
 </body></html>"""
 
 
-def render_login(err="", msg="") -> str:
+def render_login(err="", msg="", allow_register=False) -> str:
+    reg = '<a href="/register">注册账号</a>' if allow_register else ''
     return auth_layout("登录", f"""{_alert(err, msg)}
     <form method="post" action="/login">
       <label>用户名 / 邮箱</label><input name="username" required autofocus>
       <label>密码</label><input name="password" type="password" required>
       <button class="btn wide">登录</button>
     </form>
-    <div class="authlinks"><a href="/forgot">忘记密码?</a><a href="/register">注册账号</a></div>""")
+    <div class="authlinks"><a href="/forgot">忘记密码?</a>{reg}</div>""")
 
 
 def render_register(err="", first=False) -> str:
@@ -1938,9 +1939,13 @@ class Handler(BaseHTTPRequestHandler):
 
             # 公开认证页
             if path == "/login":
-                self._html(render_login(q.get("err", [""])[0], q.get("msg", [""])[0])); return
+                self._html(render_login(q.get("err", [""])[0], q.get("msg", [""])[0],
+                                        allow_register=(n_admin == 0))); return
             if path == "/register":
-                self._html(render_register(q.get("err", [""])[0], first=(n_admin == 0))); return
+                # 仅首次(无管理员)开放注册; 已有管理员后关闭, 防止外人注册看到全部数据
+                if n_admin > 0:
+                    self._to("/login?err=" + quote("注册已关闭(仅首次初始化开放)")); return
+                self._html(render_register(q.get("err", [""])[0], first=True)); return
             if path == "/forgot":
                 self._html(render_forgot(q.get("err", [""])[0], q.get("msg", [""])[0])); return
             if path == "/reset":
@@ -2111,6 +2116,9 @@ class Handler(BaseHTTPRequestHandler):
                 tok = auth.new_session(store, a["id"])
                 self._to("/", f"sid={tok}; HttpOnly; Path=/; Max-Age=604800; SameSite=Lax"); return
             if path == "/register":
+                # 已有管理员后禁止再注册(仅首次初始化开放), 防外人注册看到全部数据
+                if store.admin_count() > 0:
+                    self._to("/login?err=" + quote("注册已关闭(仅首次初始化开放)")); return
                 u = form.get("username", "").strip()
                 p = form.get("password", "")
                 e = form.get("email", "").strip() or None
