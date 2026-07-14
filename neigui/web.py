@@ -1541,10 +1541,22 @@ def _update_card() -> str:
     </div>"""
 
 
-def render_settings(admin, msg="", err="") -> str:
+def render_settings(admin, msg="", err="", store=None) -> str:
     dbp = CONFIG.db_path
     size = os.path.getsize(dbp) / 1024 if os.path.exists(dbp) else 0
+    paid_only = (store.get_kv("sync_paid_only", "0") == "1") if store else False
+    paid_card = f"""
+    <div class="card">
+      <div class="card-title">数据同步范围</div>
+      <form method="post" action="/settings/sync-scope" class="autoform">
+        <label class="switch" style="margin-right:8px"><input type="checkbox" name="paid_only" {'checked' if paid_only else ''} onchange="this.form.submit()"><span class="track"></span></label>
+        <span>只同步<b>购买过的用户</b>(跳过从未购买的免费注册)</span>
+      </form>
+      <div class="dim small" style="margin-top:8px">开启后: 同步只拉有套餐或有到期时间的用户, 并<b>清除本地已同步的"从未购买"用户</b>——
+      大幅减小数据量、面板更快。有拉取记录的用户仍会出现在风险名单(通过日志), 不受影响。改后请到「运行控制」重新同步。</div>
+    </div>"""
     return f"""{_card_alert(msg, err)}
+    {paid_card}
     <div class="card">
       <div class="card-title">数据库 / 迁移</div>
       <table class="grid"><tbody>
@@ -2023,7 +2035,7 @@ class Handler(BaseHTTPRequestHandler):
                 content = render_domains(store, q.get("panel", [""])[0], q.get("tier", [""])[0],
                                          q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "settings":
-                content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0])
+                content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0], store=store)
             elif active == "logstore":
                 content = render_logstore(store, q.get("src", [""])[0],
                                           q.get("size", ["10"])[0], q.get("page", ["1"])[0])
@@ -2395,6 +2407,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._back(); return
             if path == "/nodes/delete":
                 store.delete_entity(int(form["id"])); self._back(); return
+            if path == "/settings/sync-scope":
+                on = form.get("paid_only") in ("on", "1", "true")
+                store.set_kv("sync_paid_only", "1" if on else "0")
+                if on:
+                    removed = store.purge_unpaid_users()
+                    self._to("/settings?msg=" + quote(f"已开启: 清除本地未购买用户 {removed} 个, 下次同步只拉购买过的"))
+                else:
+                    self._to("/settings?msg=" + quote("已关闭: 恢复同步全部用户")); return
+                return
             if path == "/settings/password":
                 if not auth.verify_password(form.get("old", ""), admin["salt"], admin["pwd_hash"]):
                     self._to("/settings?err=" + quote("当前密码不正确")); return

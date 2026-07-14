@@ -87,8 +87,11 @@ def ingest_logfile(store: Store, path_spec: str, reset: bool = False,
 def sync_v2board(store: Store, cfg: dict, panel: str = None):
     """返回 (用户数, 协议列表, 节点数, 中转数)。节点/协议探测失败不影响用户同步。"""
     from .connectors.v2board import V2BoardConnector
+    paid_only = store.get_kv("sync_paid_only", "0") == "1"
     conn = V2BoardConnector(cfg)
-    n = conn.sync_users(store, panel)
+    n = conn.sync_users(store, panel, paid_only=paid_only)
+    if paid_only:
+        store.purge_unpaid_users(panel)   # 顺带清掉本地已同步的"从未购买"用户
     try:
         protos, total, relay = conn.detect_nodes(store, panel)
     except Exception:  # noqa: BLE001

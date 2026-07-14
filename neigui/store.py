@@ -133,6 +133,20 @@ class Store:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_pulls_uniq "
                 "ON pulls(token, ts, ip, uri)")
 
+    def purge_unpaid_users(self, panel: Optional[str] = None) -> int:
+        """删除本地"从未购买"用户(无套餐 且 无到期时间)。panel 限定某机场; 返回删除数。
+        有拉取记录的 token 仍会通过 pulls 出现在风险名单, 不受影响。"""
+        cond = "(plan IS NULL OR plan IN ('','0')) AND (expired_at IS NULL OR expired_at='')"
+        args = []
+        if panel is not None:
+            cond += " AND panel=?"
+            args.append(panel)
+        cur = self.conn.execute(f"DELETE FROM users WHERE {cond}", args)
+        self.conn.commit()
+        if cur.rowcount:
+            self.bump_data_version()
+        return cur.rowcount
+
     def bump_data_version(self) -> None:
         """数据变更计数, 供分析结果缓存判断是否需要重算。"""
         self.conn.execute(

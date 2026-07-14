@@ -51,16 +51,22 @@ class V2BoardConnector:
                     "group": "group_id", "created": "created_at", "expired": "expired_at",
                     "banned": "banned", "u": "u", "d": "d"}
 
-    def sync_users(self, store: Store, panel: str = None) -> int:
-        """读 v2_user, upsert 到本地 users 表。流量 = u + d。panel=归属机场名。"""
+    def sync_users(self, store: Store, panel: str = None, paid_only: bool = False) -> int:
+        """读 v2_user, upsert 到本地 users 表。流量 = u + d。panel=归属机场名。
+        paid_only=True: 只同步购买过的(有套餐或有到期时间), 跳过从未购买的免费注册。"""
         prefix = self.cfg.get("prefix", "v2_")
         c = {**self.COLS_DEFAULT, **(self.cfg.get("cols") or {})}
+        where = ""
+        if paid_only:
+            # 有套餐(plan 非空非0)或有到期时间 = 购买过; 二者皆无 = 从未购买
+            where = (f" WHERE ({c['plan']} IS NOT NULL AND {c['plan']}<>0) "
+                     f"OR {c['expired']} IS NOT NULL")
         sql = (
             f"SELECT {c['id']} AS id, {c['token']} AS token, {c['email']} AS email, "
             f"{c['plan']} AS plan_id, {c['group']} AS group_id, {c['created']} AS created_at, "
             f"{c['expired']} AS expired_at, "
             f"(COALESCE({c['u']},0) + COALESCE({c['d']},0)) AS traffic, {c['banned']} AS banned "
-            f"FROM {prefix}user"
+            f"FROM {prefix}user{where}"
         )
         conn = self._connect()
         n = 0
