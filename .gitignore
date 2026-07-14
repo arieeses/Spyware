@@ -20,3 +20,7 @@ venv/
 # agent 本地状态
 /opt/neigui-agent/
 state.json
+
+# ASN 库(几十 MB, 运行时下载, 勿提交)
+data/ip2asn-v4.tsv
+data/ip2asn-v6.tsv

@@ -243,6 +243,7 @@ def _user_detail(store, tok: str) -> dict:
     if not user and not pulls:
         return {"error": "未找到该用户"}
     from datetime import timedelta, timezone
+    _ipc0 = IpClassifier()
     win_h = CONFIG.thresholds.online_window_hours
     _now = datetime.now(timezone.utc)
     _since = (_now - timedelta(hours=max(1, win_h))).isoformat()
@@ -270,6 +271,7 @@ def _user_detail(store, tok: str) -> dict:
         "distinct_uas": r.distinct_uas, "online_ips": r.online_ips,
         "ip_shared_users": r.ip_shared_users,
         "pulls": [{"ts": (p["ts"] or "")[:19].replace("T", " "), "ip": p["ip"],
+                   "asn": _ip_asn_label(_ipc0, p["ip"]),
                    "ua": (p["ua"] or "")[:30]} for p in pulls[-15:][::-1]],
     }
     orders, omsg = [], "无订单记录"
@@ -284,6 +286,18 @@ def _user_detail(store, tok: str) -> dict:
                 omsg = f"订单查询失败: {e}"
     d["orders"], d["orders_msg"] = orders, omsg
     return d
+
+
+_ASN_TYPE_CN = {"hosting": "机房", "residential": "住宅", "self": "自有", "unknown": "?"}
+
+
+def _ip_asn_label(ipc, ip: str) -> str:
+    """给详情页每条拉取标注 ASN + 类型, 如 'AS4812 CHINANET · 住宅'。"""
+    asn, org = ipc.asn_info(ip)
+    typ = _ASN_TYPE_CN.get(ipc.classify(ip), "")
+    if asn:
+        return f"AS{asn} {(org or '')[:22]} · {typ}"
+    return typ or "-"
 
 
 def _mask(s: str) -> str:
@@ -943,6 +957,32 @@ def _setting_row(label, desc, action, content, extra="") -> str:
     </form>"""
 
 
+def _asn_db_card() -> str:
+    """ASN 库(iptoasn)状态 + 一键更新。"""
+    import os as _os
+    path = CONFIG.asn_db_file
+    try:
+        sz = _os.path.getsize(path)
+        mt = datetime.fromtimestamp(_os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")
+        from .asn import get_asndb
+        db = get_asndb()
+        cnt = db.count if db else 0
+        status = (f'<span class="on">● 已启用</span> · {cnt:,} 条网段 · '
+                  f'{sz / 1048576:.0f}MB · 更新于 {mt}')
+    except OSError:
+        status = '<span class="off">● 未安装</span> · 点右侧按钮下载后, 机房判定/ASN黑名单自动精确化'
+    return f"""
+    <form method="post" action="/whitelist/update-asn" class="stackrow"
+          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='下载中(约30-60秒)…'">
+      <div class="sr-head"><b>IP → ASN 库(iptoasn.com, 免费离线)</b>
+        <div class="dim small">判定住宅/机房的核心数据源。下载一次即离线生效, 覆盖全球 ASN, 比手工 CIDR 准得多。建议每月更新。</div></div>
+      <div style="margin-top:6px">{status}</div>
+      <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+        <input name="url" placeholder="默认 https://iptoasn.com/data/ip2asn-v4.tsv.gz (可留空)" style="flex:1;max-width:420px">
+        <button class="btn">下载 / 更新 ASN 库</button></div>
+    </form>"""
+
+
 def render_whitelist(msg="", err="", tab="white") -> str:
     tab = "black" if tab == "black" else "white"
     subtabs = (
@@ -958,10 +998,13 @@ def render_whitelist(msg="", err="", tab="white") -> str:
                      '<button class="btn ghost" form="fetchhosting" formaction="/whitelist/fetch-hosting">'
                      '从URL拉取</button>')
         body = (
-            _setting_row("自有基础设施 IP", "命中即排除(自己的节点/subconverter/监控)。只填自己的 IP/CIDR, 别填整个机房 ASN。",
+            _asn_db_card()
+            + _setting_row("自有基础设施 IP", "命中即排除(自己的节点/subconverter/监控)。只填自己的 IP/CIDR, 别填整个机房 ASN。",
                          "/whitelist/save-self", _read_file(CONFIG.self_ips_file))
-            + _setting_row(f"IP / ASN 库(机房网段) · {_count_cidrs(hosting)} 条",
-                           "判定“机房 ASN 拉订阅”依赖此库。可编辑或从 URL 拉取覆盖。生产建议接 MaxMind GeoLite2-ASN 更准。",
+            + _setting_row("机房关键词(ASN 库判定用)", "ASN 库启用后, AS 组织名命中这些关键词即判为机房/IDC。可增删。",
+                           "/whitelist/save-asnkw", _read_file(CONFIG.asn_hosting_kw_file))
+            + _setting_row(f"机房网段 CIDR(补充) · {_count_cidrs(hosting)} 条",
+                           "ASN 库覆盖不到的机房网段可在此手工补。可从 URL 拉取覆盖。",
                            "/whitelist/save-hosting", hosting, extra=fetch_btn)
             + _setting_row("客户端 UA 白名单", "正规客户端 UA(clash/v2rayN/Shadowrocket 等), 每行一个正则; 配合住宅 ASN 视为正常。",
                            "/whitelist/save-ua", _read_file(CONFIG.ua_clients_file))
@@ -975,7 +1018,7 @@ def render_whitelist(msg="", err="", tab="white") -> str:
                          "/blacklist/save-ip", _read_file(CONFIG.ip_blacklist_file))
             + _setting_row("UA 黑名单", "攻击脚本/爬虫特征 UA。命中即判高危。每行一个正则。",
                            "/blacklist/save-ua", _read_file(CONFIG.ua_blacklist_file))
-            + _setting_row("ASN 黑名单", "封整个恶意机房网段。每行 CIDR(现在生效)或 ASxxxx(需 GeoLite2)。",
+            + _setting_row("ASN 黑名单", "封整个恶意机房网段。每行 CIDR, 或 ASxxxx(装了 ASN 库即生效, 如 AS4134)。",
                            "/blacklist/save-asn", _read_file(CONFIG.asn_blacklist_file)))
         note = "黑名单: 任一命中→用户直接标为高风险并强制隔离下发(见系统设置说明)。"
 
@@ -1694,7 +1737,7 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
       h+='<tr><td>在线IP / UA数</td><td>'+esc0(d.online_ips)+' 个在线 / '+esc0(d.distinct_uas)+' 个UA</td></tr>';
       h+='<tr><td>IP共用账号</td><td>'+(d.ip_shared_users>=2?'<span style="color:#e5484d;font-weight:600">'+esc0(d.ip_shared_users)+' 个账号共用同一IP</span>':esc0(d.ip_shared_users)+' 个')+'</td></tr></table>';
       h+='<h4>最近拉取记录</h4>';
-      if(d.pulls&&d.pulls.length){{h+='<table>';d.pulls.forEach(function(p){{h+='<tr><td>'+esc0(p.ts)+'</td><td>'+esc0(p.ip)+' · '+esc0(p.ua)+'</td></tr>';}});h+='</table>';}}
+      if(d.pulls&&d.pulls.length){{h+='<table>';d.pulls.forEach(function(p){{h+='<tr><td>'+esc0(p.ts)+'</td><td>'+esc0(p.ip)+(p.asn?' <span class="dim">['+esc0(p.asn)+']</span>':'')+' · '+esc0(p.ua)+'</td></tr>';}});h+='</table>';}}
       else h+='<div class="dim">暂无拉取记录(未接入订阅日志)</div>';
       h+='<h4>订单记录</h4>';
       if(d.orders&&d.orders.length){{h+='<table>';d.orders.forEach(function(o){{h+='<tr><td>'+esc0(o.created_at)+'</td><td>￥'+esc0(o.amount)+' · '+esc0(o.status)+'</td></tr>';}});h+='</table>';}}
@@ -2215,6 +2258,27 @@ class Handler(BaseHTTPRequestHandler):
                 with open(CONFIG.proxy_ips_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
                 self._to("/whitelist?msg=" + quote("反代 IP 过滤已保存")); return
+            if path == "/whitelist/save-asnkw":
+                with open(CONFIG.asn_hosting_kw_file, "w", encoding="utf-8") as f:
+                    f.write(form.get("content", ""))
+                self._to("/whitelist?msg=" + quote("机房关键词已保存")); return
+            if path == "/whitelist/update-asn":
+                url = (form.get("url", "") or "").strip() or "https://iptoasn.com/data/ip2asn-v4.tsv.gz"
+                try:
+                    import gzip as _gz
+                    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=120) as r:
+                        raw = r.read()
+                    data = _gz.decompress(raw) if url.endswith(".gz") else raw
+                    with open(CONFIG.asn_db_file, "wb") as f:
+                        f.write(data)
+                    from .asn import get_asndb
+                    db = get_asndb()
+                    n = db.count if db else 0
+                    self._to("/whitelist?msg=" + quote(f"ASN 库已更新: {n} 条网段"))
+                except Exception as e:  # noqa: BLE001
+                    self._to("/whitelist?err=" + quote(f"下载失败: {e}"))
+                return
             if path == "/blacklist/save-ip":
                 with open(CONFIG.ip_blacklist_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))

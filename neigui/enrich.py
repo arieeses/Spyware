@@ -31,11 +31,16 @@ def _load_cidrs(path: str) -> List:
 
 
 class IpClassifier:
-    """返回 self / hosting / residential / unknown。"""
+    """返回 self / hosting / residential / unknown。
+
+    判定顺序: 自有名单 > 机房 CIDR 名单 > ASN 库(iptoasn, 若已下载) > 内网 > 默认住宅。
+    """
 
     def __init__(self, self_file: Optional[str] = None, hosting_file: Optional[str] = None):
         self.self_nets = _load_cidrs(self_file or CONFIG.self_ips_file)
         self.hosting_nets = _load_cidrs(hosting_file or CONFIG.hosting_cidrs_file)
+        from .asn import get_asndb
+        self.asndb = get_asndb()  # 缓存单例; 无库时为 None
 
     def classify(self, ip: str) -> str:
         try:
@@ -49,9 +54,21 @@ class IpClassifier:
         for net in self.hosting_nets:
             if addr in net:
                 return "hosting"
+        # ASN 库: 组织名命中机房关键词 → hosting(比手工 CIDR 覆盖广得多)
+        if self.asndb is not None:
+            from .asn import is_hosting_org
+            _asn, desc = self.asndb.lookup(ip)
+            if desc and is_hosting_org(desc):
+                return "hosting"
         if addr.is_private:
             return "self"  # 内网视为自有基础设施
-        return "residential"  # 名单外默认住宅(生产用 ASN 库精确化)
+        return "residential"  # 名单外默认住宅
+
+    def asn_info(self, ip: str):
+        """返回 (asn, 组织名); 无 ASN 库时 (0, "")。"""
+        if self.asndb is None:
+            return (0, "")
+        return self.asndb.lookup(ip)
 
 
 # —— UA 分类 ——
@@ -84,20 +101,48 @@ def _load_patterns(path: str) -> List[str]:
     return pats
 
 
+def _load_asn_numbers(path: str):
+    """从名单文件里取 ASxxxx / asxxxx / 纯数字行 → ASN 号集合。"""
+    nums = set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip().upper()
+                if not line:
+                    continue
+                if line.startswith("AS") and line[2:].isdigit():
+                    nums.add(int(line[2:]))
+                elif line.isdigit():
+                    nums.add(int(line))
+    except FileNotFoundError:
+        pass
+    return nums
+
+
 class Blacklist:
     """IP/ASN(CIDR)与 UA(正则)黑名单。命中即高危。"""
 
     def __init__(self):
-        # ASN 黑名单文件里的 CIDR 也并入 IP 网段匹配; 纯 ASxxxx 号需 GeoLite2 才生效
+        # ASN 黑名单文件里的 CIDR 并入 IP 网段匹配; ASxxxx 号经 ASN 库解析(需已下载)
         self.ip_nets = _load_cidrs(CONFIG.ip_blacklist_file) + _load_cidrs(CONFIG.asn_blacklist_file)
         self.ua_patterns = _load_patterns(CONFIG.ua_blacklist_file)
+        self.asn_numbers = _load_asn_numbers(CONFIG.asn_blacklist_file)
+        from .asn import get_asndb
+        self.asndb = get_asndb() if self.asn_numbers else None
 
     def ip_hit(self, ip: str) -> bool:
         try:
             addr = ipaddress.ip_address(ip)
         except ValueError:
             return False
-        return any(addr in net for net in self.ip_nets)
+        if any(addr in net for net in self.ip_nets):
+            return True
+        # ASxxxx 黑名单: 用 ASN 库解析该 IP 的 ASN 号比对
+        if self.asndb is not None and self.asn_numbers:
+            asn, _ = self.asndb.lookup(ip)
+            if asn and asn in self.asn_numbers:
+                return True
+        return False
 
     def ua_hit(self, ua: str) -> bool:
         ua = ua or ""
