@@ -1,13 +1,41 @@
 """全流程编排: 逐 token 聚合特征 → 评分 → 按分数排序。"""
 from __future__ import annotations
 
+import json
+from dataclasses import asdict, replace
 from typing import List
 
-from .config import CONFIG, Config
+from .config import CONFIG, Config, Thresholds, Weights
 from .enrich import Blacklist, IpClassifier, UaClassifier
 from .features import build_features
 from .scoring import RiskResult, score_token
 from .store import Store
+
+
+def load_config(store, base: Config = CONFIG) -> Config:
+    """把面板里改过的权重/阈值(kv risk_overrides)覆盖到默认 config 上, 得到生效配置。"""
+    raw = store.get_kv("risk_overrides", "")
+    if not raw:
+        return base
+    try:
+        ov = json.loads(raw)
+    except (ValueError, TypeError):
+        return base
+    w = asdict(base.weights)
+    th = asdict(base.thresholds)
+    for k, v in (ov.get("weights") or {}).items():
+        if k in w:
+            try:
+                w[k] = float(v)
+            except (ValueError, TypeError):
+                pass
+    for k, v in (ov.get("thresholds") or {}).items():
+        if k in th:
+            try:
+                th[k] = type(th[k])(float(v))   # 保持 int/float 原类型
+            except (ValueError, TypeError):
+                pass
+    return replace(base, weights=Weights(**w), thresholds=Thresholds(**th))
 
 
 def _pdt(s):
@@ -36,11 +64,13 @@ _ANALYZE_CACHE = {"key": None, "val": None}
 _ANALYZE_LOCK = threading.Lock()
 
 
-def analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
+def analyze(store: Store, cfg: Config = None) -> List[RiskResult]:
     """带缓存: 数据未变(data_version 不变)且在 5 分钟窗口内, 直接复用上次结果。
-    翻页/筛选/搜索都走缓存, 不再对全部用户重算。"""
+    翻页/筛选/搜索都走缓存, 不再对全部用户重算。改权重/阈值(risk_overrides)也会失效。"""
+    cfg = cfg or load_config(store)
     key = (store.data_version(), store.get_kv("signals_off", ""),
-           store.get_kv("rewrite_scope", ""), int(_time.time() // 300))
+           store.get_kv("rewrite_scope", ""), store.get_kv("risk_overrides", ""),
+           int(_time.time() // 300))
     with _ANALYZE_LOCK:
         if _ANALYZE_CACHE["key"] == key and _ANALYZE_CACHE["val"] is not None:
             return _ANALYZE_CACHE["val"]
@@ -80,11 +110,12 @@ def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
     return results
 
 
-def decide(store: Store, token: str, cfg: Config = CONFIG) -> dict:
+def decide(store: Store, token: str, cfg: Config = None) -> dict:
     """给订阅网关用: 返回某 token 的处置池。
     pool: normal(真实节点) / limited(限速节点) / isolated(隔离/特定IP节点)。
     """
     from datetime import datetime, timedelta, timezone
+    cfg = cfg or load_config(store)
     pulls = store.pulls_for(token)
     user = store.user(token)
     win_h = cfg.thresholds.online_window_hours

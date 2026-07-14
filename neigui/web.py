@@ -259,14 +259,16 @@ def _user_detail(store, tok: str) -> dict:
     if not user and not pulls:
         return {"error": "未找到该用户"}
     from datetime import timedelta, timezone
+    from .pipeline import load_config
+    _cfg = load_config(store)
     _ipc0 = IpClassifier()
-    win_h = CONFIG.thresholds.online_window_hours
+    win_h = _cfg.thresholds.online_window_hours
     _now = datetime.now(timezone.utc)
     _since = (_now - timedelta(hours=max(1, win_h))).isoformat()
     r = score_token(build_features(tok, pulls, user, IpClassifier(), UaClassifier(), Blacklist(),
                                    ip_users=store.ip_user_counts_for_token(tok, _since),
                                    window_hours=win_h, now=_now),
-                    CONFIG, _disabled_signals(store))
+                    _cfg, _disabled_signals(store))
     plan = user["plan"] if user and "plan" in user.keys() else None
     has_plan = bool(plan and str(plan) not in ("", "0", "None"))
     if r.expired_at:
@@ -960,28 +962,51 @@ def _rule_switch(key: str, off: set) -> str:
             f'onchange="this.form.submit()"><span class="track"></span></label></form>')
 
 
-def render_rules(store) -> str:
+_RNUM = ('style="width:92px;padding:5px 8px;border:1px solid #d5dae1;border-radius:6px;'
+         'text-align:right;font-family:inherit"')
+
+
+def _rule_toggle(key: str, off: set) -> str:
+    """并入大表单的开关(不再独立提交)。"""
+    checked = "" if key in off else "checked"
+    return (f'<label class="switch"><input type="checkbox" name="on_{key}" {checked}>'
+            f'<span class="track"></span></label>')
+
+
+def render_rules(store, msg="", err="") -> str:
+    from .pipeline import load_config
     off = _rules_off(store)
-    w = asdict(CONFIG.weights)
-    th = asdict(CONFIG.thresholds)
+    cfg = load_config(store)          # 显示当前生效值(含面板改过的)
+    w = asdict(cfg.weights)
+    th = asdict(cfg.thresholds)
     wl = "".join(
         f'<tr><td>{esc(WEIGHT_CN.get(k, (k, ""))[0])}</td>'
         f'<td class="dim small">{esc(WEIGHT_CN.get(k, ("", ""))[1])}</td>'
-        f'<td class="num">{v}</td><td>{_rule_switch(k, off)}</td></tr>' for k, v in w.items())
+        f'<td><input type="number" step="0.1" name="w_{k}" value="{v}" {_RNUM}></td>'
+        f'<td>{_rule_toggle(k, off)}</td></tr>' for k, v in w.items())
     tl = "".join(
-        f'<tr><td>{esc(THRESH_CN.get(k, k))}</td><td class="num">{v}</td>'
-        f'<td>{_rule_switch(k, off)}</td></tr>' for k, v in th.items())
-    return f"""
+        f'<tr><td>{esc(THRESH_CN.get(k, k))}</td>'
+        f'<td><input type="number" step="any" name="t_{k}" value="{v}" {_RNUM}></td>'
+        f'<td>{_rule_toggle(k, off)}</td></tr>' for k, v in th.items())
+    return f"""{_card_alert(msg, err)}
+    <form method="post" action="/rules/save">
     <div class="card">
-      <div class="card-title">信号权重(命中程度 × 权重 = 得分)</div>
+      <div class="card-title">信号权重(命中程度 × 权重 = 得分)
+        <button class="btn" style="margin-left:auto">保存全部</button></div>
       <table class="grid"><thead><tr><th>信号</th><th>说明</th><th>权重</th><th>启用</th></tr></thead><tbody>{wl}</tbody></table>
-      <div class="dim small" style="margin-top:10px">开关关闭即停用该信号, 评分立即生效(刷新可见)。</div>
+      <div class="dim small" style="margin-top:10px">直接改数值或开关, 点「保存全部」即生效(无需重启, 也不用改 config.py)。</div>
     </div>
     <div class="card">
       <div class="card-title">阈值参数</div>
       <table class="grid"><thead><tr><th>参数</th><th>值</th><th>启用</th></tr></thead><tbody>{tl}</tbody></table>
-      <div class="dim small" style="margin-top:10px">「自有IP排除」开关关闭即停用排除层; 权重开关控制各信号。数值改动请编辑 config.py。</div>
-    </div>"""
+      <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
+        <button class="btn">保存全部</button>
+        <button class="btn ghost" formaction="/rules/reset" formnovalidate
+                onclick="return confirm('恢复为代码内置默认值?')">恢复默认</button>
+        <span class="dim small">「自有IP排除」开关关闭即停用排除层; 各信号开关控制是否参与评分。</span>
+      </div>
+    </div>
+    </form>"""
 
 
 def _read_file(path: str) -> str:
@@ -2029,7 +2054,7 @@ class Handler(BaseHTTPRequestHandler):
                                           q.get("panel", ["all"])[0], q.get("q", [""])[0],
                                           q.get("size", ["10"])[0], q.get("page", ["1"])[0])
             elif active == "rules":
-                content = render_rules(store)
+                content = render_rules(store, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "whitelist":
                 content = render_whitelist(q.get("msg", [""])[0], q.get("err", [""])[0],
                                            q.get("tab", ["white"])[0])
@@ -2305,6 +2330,33 @@ class Handler(BaseHTTPRequestHandler):
                     off.add(key)
                 store.set_kv("signals_off", json.dumps(sorted(off)))
                 self._back(); return
+            if path == "/rules/save":
+                wkeys = list(asdict(CONFIG.weights).keys())
+                tkeys = list(asdict(CONFIG.thresholds).keys())
+                weights, ths = {}, {}
+                for k in wkeys:
+                    v = form.get(f"w_{k}", "")
+                    if v != "":
+                        try:
+                            weights[k] = float(v)
+                        except ValueError:
+                            pass
+                for k in tkeys:
+                    v = form.get(f"t_{k}", "")
+                    if v != "":
+                        try:
+                            ths[k] = float(v)
+                        except ValueError:
+                            pass
+                store.set_kv("risk_overrides", json.dumps({"weights": weights, "thresholds": ths}))
+                # 未勾选的开关 → 停用
+                off = [k for k in wkeys + tkeys if not form.get(f"on_{k}")]
+                store.set_kv("signals_off", json.dumps(sorted(off)))
+                self._to("/rules?msg=" + quote("已保存, 评分即时生效")); return
+            if path == "/rules/reset":
+                store.set_kv("risk_overrides", "")
+                store.set_kv("signals_off", "")
+                self._to("/rules?msg=" + quote("已恢复内置默认")); return
             if path == "/agent/logpath":
                 src = store.get_source(int(form["id"]))
                 if src:
