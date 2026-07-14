@@ -421,6 +421,19 @@ class Store:
                     toks.add(r["token"])
         return toks
 
+    def pull_ips_for_tokens(self, tokens) -> dict:
+        """批量取一组 token 各自的拉取 IP 列表(导出用)。分批 IN 查询。"""
+        out: dict = {}
+        tl = list(tokens)
+        for i in range(0, len(tl), 400):
+            chunk = tl[i:i + 400]
+            ph = ",".join("?" * len(chunk))
+            for r in self.conn.execute(
+                    f"SELECT DISTINCT token, ip FROM pulls WHERE token IN ({ph}) "
+                    f"AND ip IS NOT NULL AND ip<>''", chunk).fetchall():
+                out.setdefault(r["token"], []).append(r["ip"])
+        return out
+
     def ip_panel_map(self) -> dict:
         """每个拉取 IP 出现在哪些面板(src)。用于「跨面板同IP」信号。"""
         out: dict = {}

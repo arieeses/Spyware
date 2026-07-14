@@ -1411,6 +1411,8 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     <div class="card">
       <div class="card-title" style="flex-wrap:wrap;gap:8px">用户风险管理
         <button class="btn sm ghost" type="button" onclick="openM('colModal')">显示列 ▾</button>
+        <a class="btn sm ghost" href="/risk/export?level={lf}&panel={pf}&q={quote(search)}"
+           title="导出当前筛选结果为 CSV(最多2万行)">⬇ 导出CSV</a>
         <span class="chips" style="margin:0">{chips}</span>
         {searchbox}</div>
       <div class="tabs">{tabs}</div>
@@ -2023,6 +2025,46 @@ class Handler(BaseHTTPRequestHandler):
                     self.wfile.write(data)
                 else:
                     self._send(b"no db", "text/plain")
+                return
+
+            if path == "/risk/export":
+                # 导出当前筛选(等级/面板/搜索)命中的账号为 CSV, 最多 2 万行
+                import csv as _csv
+                import io as _io
+                flt = q.get("level", ["all"])[0]
+                pf = q.get("panel", ["all"])[0]
+                sq = (q.get("q", [""])[0] or "").strip()
+                from .asn import get_asndb
+                asndb = get_asndb()
+                ipt = store.tokens_by_search(sq, asndb) if sq else set()
+                total = min(20000, store.count_scores(flt, pf, sq, ipt))
+                rows = store.list_scores(flt, pf, sq, ipt, limit=total or 1, offset=0)
+                ipmap = store.pull_ips_for_tokens([r.token for r in rows])
+                buf = _io.StringIO()
+                wr = _csv.writer(buf)
+                wr.writerow(["token", "邮箱", "用户ID", "面板", "风险分", "等级", "命中信号",
+                             "IP", "ASN", "IP数", "在线IP", "UA数", "共用账号", "拉取次数",
+                             "已用流量", "注册时间", "到期时间", "最后活跃"])
+                for r in rows:
+                    ips = ipmap.get(r.token, [])
+                    asns = sorted({f"AS{asndb.lookup(ip)[0]}" for ip in ips
+                                   if asndb and asndb.lookup(ip)[0]}) if asndb else []
+                    wr.writerow([
+                        r.token, r.email or "", r.user_id if r.user_id is not None else "",
+                        r.panel or "", r.score, r.level, " ".join(r.tags),
+                        " ".join(ips[:10]), " ".join(asns),
+                        r.distinct_ips, r.online_ips, r.distinct_uas, r.ip_shared_users, r.pull_count,
+                        _human_bytes(r.traffic_bytes),
+                        r.created_at.strftime("%Y-%m-%d") if r.created_at else "",
+                        r.expired_at.strftime("%Y-%m-%d") if r.expired_at else "",
+                        r.last_pull.strftime("%Y-%m-%d %H:%M") if r.last_pull else ""])
+                data = ("﻿" + buf.getvalue()).encode("utf-8")  # BOM: Excel 正确识别中文
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", 'attachment; filename="insiders.csv"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
                 return
 
             if path == "/api/risks":
