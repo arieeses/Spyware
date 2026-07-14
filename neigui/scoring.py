@@ -127,6 +127,12 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
         signals.append(Signal("多客户端UA", w.multi_ua,
             f"该 token 用过 {f.distinct_uas} 个不同 UA, 疑似多人共享或工具轮换", tag="多UA"))
 
+    # 7b. 短时多UA轮换(短时窗口内秒级切换多个客户端 UA, 自动化探测)
+    if on("ua_burst") and f.burst_uas >= th.burst_ua_min:
+        signals.append(Signal("短时多UA轮换", w.ua_burst,
+            f"{th.burst_ua_window}s 内轮换 {f.burst_uas} 个不同 UA, 真人不可能, 疑似自动化探测",
+            tag="短时多UA"))
+
     # 8. 多IP在线(近期活跃窗口内在多个 IP 出现, 分发/扫描)
     if on("online_ips") and f.online_ips >= th.online_ips_min:
         signals.append(Signal("多IP在线", w.online_ips,

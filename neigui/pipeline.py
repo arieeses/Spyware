@@ -126,10 +126,12 @@ def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
     results: List[RiskResult] = []
     pull_tokens = set(store.tokens())
     # 有拉取行为的用户: 正常评分
+    bw = cfg.thresholds.burst_ua_window
     for token in pull_tokens:
         feats = build_features(token, store.pulls_for(token), store.user(token), ipc, uac, bl,
                                ip_users=ip_users, window_hours=win_h, now=now,
-                               ip_panels=ip_panels, email_panels=email_panels, featlib=featlib)
+                               ip_panels=ip_panels, email_panels=email_panels, featlib=featlib,
+                               burst_window=bw)
         results.append(score_token(feats, cfg, off))
     # 同步来但暂无拉取日志的用户: 仍按"画像信号"评分(如「有效期内零流量新号」重点排查),
     # 无拉取所以 IP/UA/ASN 等日志类信号不触发。空拉取的 build_features 很轻。

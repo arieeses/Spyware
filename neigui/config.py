@@ -39,6 +39,7 @@ class Weights:
     traffic_divergence: float = 30.0 # 拉取活跃却零流量(抗伪装)
     reg_trajectory: float = 15.0     # 注册即拉取且无流量(新号侦察)
     multi_ua: float = 12.0           # 单 token 用多个不同客户端UA(共享/轮换)
+    ua_burst: float = 25.0           # 短时窗口内秒级轮换多个UA(自动化探测, 比总数更硬)
     online_ips: float = 18.0         # 单 token 近期在多个IP在线(分发/扫描)
     ip_shared: float = 22.0          # 该 token 的IP被多个账号共用(聚合点/攻击机)
     active_lowtraffic: float = 30.0  # 2025+注册 + 有效期内 + 流量<5MB(付费却几乎不用)
@@ -89,6 +90,9 @@ class Thresholds:
     symmetry_min_bytes: int = 10 * 1024 * 1024
     # 多UA: 一个 token 用过的不同 UA 数达此值即判「多UA」
     multi_ua_min: int = 4
+    # 短时多UA: burst_window 秒窗口内不同 UA 数达此值即判「短时多UA」
+    burst_ua_min: int = 4
+    burst_ua_window: int = 120
     # 在线IP: 一个 token 近期活跃 IP 数达此值即判「多IP在线」
     online_ips_min: int = 6
     # IP共用: 该 token 的某个IP被这么多不同账号共用即判「IP共用」

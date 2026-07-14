@@ -271,7 +271,7 @@ def _user_detail(store, tok: str) -> dict:
                                    ip_users=store.ip_user_counts_for_token(tok, _since),
                                    window_hours=win_h, now=_now,
                                    ip_panels=store.ip_panel_map(), email_panels=store.email_panel_map(),
-                                   featlib=FeatureLib(store)),
+                                   featlib=FeatureLib(store), burst_window=_cfg.thresholds.burst_ua_window),
                     _cfg, _disabled_signals(store))
     plan = user["plan"] if user and "plan" in user.keys() else None
     has_plan = bool(plan and str(plan) not in ("", "0", "None"))
@@ -934,6 +934,7 @@ WEIGHT_CN = {
     "traffic_divergence": ("流量背离", "持续拉取却几乎零流量, 只拿节点不使用"),
     "reg_trajectory": ("注册即侦察", "注册后立即拉取且无流量, 疑似注册就为拿节点"),
     "multi_ua": ("多客户端UA", "一个 token 用了多个不同 UA, 疑似多人共享/工具轮换"),
+    "ua_burst": ("短时多UA轮换", "短时窗口内秒级切换多个客户端UA, 真人不可能, 自动化探测铁证"),
     "online_ips": ("多IP在线", "一个 token 近期在多个不同 IP 活跃, 疑似分发/分布式扫描"),
     "ip_shared": ("IP共用账号", "该 token 的 IP 被多个账号共用, 疑似聚合点/攻击机"),
     "active_lowtraffic": ("有效期内零流量新号", "2025年后注册+订阅有效期内+流量<5MB, 付费却几乎不用, 疑似只拉节点攻击"),
@@ -953,6 +954,7 @@ THRESH_CN = {
     "reg_immediate_secs": "注册即拉-秒内算立即", "new_account_days": "新号判定-账龄天数",
     "self_exclude_ratio": "自有IP排除-占比阈值",
     "reg_year_from": "重点排查-注册年份下限(含)", "active_lowtraffic_max_bytes": "重点排查-流量上限(字节)",
+    "burst_ua_min": "短时多UA-窗口内UA数下限", "burst_ua_window": "短时多UA-窗口秒数",
     "cross_panel_ip_min": "跨面板同IP-面板数下限", "email_panel_min": "同邮箱多面板-面板数下限",
     "fixed_min_pulls": "固定时段-最少拉取次数", "fixed_min_days": "固定时段-最少跨天数",
     "fixed_concentration": "固定时段-时刻聚集度阈值(0~1)",

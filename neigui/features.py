@@ -16,6 +16,7 @@ class TokenFeatures:
     pull_count: int = 0
     distinct_ips: int = 0
     distinct_uas: int = 0         # 用过多少个不同 UA(共享/轮换嫌疑)
+    burst_uas: int = 0            # 任一短时窗口内出现的最大不同 UA 数(秒级轮换=自动化)
     online_ips: int = 0           # 近期活跃窗口内的不同 IP 数(在线IP)
     ip_shared_users: int = 0      # 该 token 的IP中, 被最多账号共用的那个的账号数
     cross_panel_ips: int = 0      # 该 token 的IP横跨的不同面板数(≥2=一机打多机场)
@@ -63,7 +64,8 @@ def build_features(token: str, pull_rows: List, user_row,
                    ipc: IpClassifier, uac: UaClassifier, bl: Blacklist = None,
                    ip_users: dict = None, window_hours: int = 24,
                    now: datetime = None, ip_panels: dict = None,
-                   email_panels: dict = None, featlib=None) -> TokenFeatures:
+                   email_panels: dict = None, featlib=None,
+                   burst_window: int = 120) -> TokenFeatures:
     f = TokenFeatures(token=token)
     f.pull_count = len(pull_rows)
 
@@ -73,6 +75,7 @@ def build_features(token: str, pull_rows: List, user_row,
     type_counts: Dict[str, int] = {}
     tool = client = 0
     times: List[datetime] = []
+    tua: List = []            # (时间, UA) 对, 供短时多UA轮换判定
     if now is None:
         now = datetime.now(timezone.utc)
     win_start = now - timedelta(hours=max(1, window_hours))
@@ -101,6 +104,8 @@ def build_features(token: str, pull_rows: List, user_row,
         dt = _parse_dt(r["ts"])
         if dt:
             times.append(dt)
+            if r["ua"]:
+                tua.append((dt, r["ua"]))
             if dt >= win_start and ip:
                 recent_ips.add(ip)
 
@@ -108,6 +113,20 @@ def build_features(token: str, pull_rows: List, user_row,
     f.distinct_ips = len(ips)
     f.distinct_uas = len(uas)
     f.online_ips = len(recent_ips)
+    # 短时多UA轮换: 任一 burst_window 秒滑动窗口内的最大不同 UA 数
+    if len(tua) >= 2:
+        tua.sort(key=lambda x: x[0])
+        cnt: Dict[str, int] = {}
+        j = 0
+        for i in range(len(tua)):
+            cnt[tua[i][1]] = cnt.get(tua[i][1], 0) + 1
+            while (tua[i][0] - tua[j][0]).total_seconds() > burst_window:
+                cnt[tua[j][1]] -= 1
+                if cnt[tua[j][1]] == 0:
+                    del cnt[tua[j][1]]
+                j += 1
+            if len(cnt) > f.burst_uas:
+                f.burst_uas = len(cnt)
     # 该 token 近期在线 IP 中, 被最多其他账号共用的那个的账号数
     if ip_users and recent_ips:
         f.ip_shared_users = max((ip_users.get(ip, 1) for ip in recent_ips), default=0)
