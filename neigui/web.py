@@ -646,8 +646,9 @@ def _log_modals() -> str:
         <div class="mfield"><input name="name" placeholder="名称, 如: 机场A" required></div>
         <div class="mfield" id="lf_agenttip"><div class="dim small">探针: 添加后点该行「复制安装命令」在面板服务器执行; 日志路径/间隔装好后在该行编辑。</div></div>
         <div class="mfield" id="lf_path" style="display:none">
-          <label class="dim small">日志路径(可多行/通配, 按日期滚动的日志用 * 匹配)</label>
-          <textarea name="path" id="lf_path_i" rows="3" placeholder="/www/wwwlogs/neigui_sub.log&#10;/www/wwwlogs/*sub.log&#10;/path/2026*su.log"></textarea>
+          <label class="dim small">日志路径(可多行/通配/目录; 目录会读其下所有 .log)</label>
+          <textarea name="path" id="lf_path_i" rows="3" placeholder="/opt/1panel/www/sites/A/log&#10;/opt/1panel/www/sites/B/log/access.log | B站&#10;/www/wwwlogs/*sub.log"></textarea>
+          <div class="dim small" style="margin-top:4px">填目录=读该目录下所有 .log; 一台机多站点可用 <code>路径 | 归属标签</code> 分开归类。</div>
         </div>
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('addLog')">取消</button><button class="btn">添加</button></div>
       </form>
@@ -658,8 +659,8 @@ def _log_modals() -> str:
         <input type="hidden" name="id" id="el_id">
         <div class="mfield"><label class="dim small">名称</label><input name="name" id="el_name"></div>
         <div class="mfield"><label class="dim small" id="el_lbl">日志路径</label>
-          <textarea name="path" id="el_path" rows="3" placeholder="每行一个路径或通配, 如 /www/wwwlogs/*sub.log"></textarea>
-          <div class="dim small" style="margin-top:4px">多个路径每行一个; 按日期滚动的日志用通配 *(如 <code>/www/wwwlogs/2026*su.log</code>)。</div></div>
+          <textarea name="path" id="el_path" rows="3" placeholder="/opt/1panel/www/sites/A/log&#10;/opt/1panel/www/sites/B/log/access.log | B站"></textarea>
+          <div class="dim small" style="margin-top:4px">每行一个; 填<b>目录</b>=读其下所有 .log; 通配用 *(如 <code>2026*su.log</code>); 多站点用 <code>路径 | 归属标签</code> 分类, 标签会作为日志库来源。</div></div>
         """ + _sync_field("el") + """
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('editLog')">取消</button><button class="btn">保存</button></div>
       </form>
@@ -1948,11 +1949,21 @@ class Handler(BaseHTTPRequestHandler):
                     payload = json.loads(raw.decode("utf-8", "replace") or "{}")
                 except ValueError:
                     payload = {}
-                raw = payload.get("logs", []) or []
                 pnets = load_proxy_nets()
-                recs = [r for r in (parse_line(ln, pnets) for ln in raw) if r]
-                n = store.add_pulls(recs, src=src["name"])
-                sent = len(raw)
+                groups = payload.get("groups")
+                if isinstance(groups, dict) and groups:
+                    # 探针按「归属标签」分组上报: 每组各自打 src 标签(标签空则用数据源名)
+                    n = sent = 0
+                    for label, lines in groups.items():
+                        lines = lines or []
+                        sent += len(lines)
+                        recs = [r for r in (parse_line(ln, pnets) for ln in lines) if r]
+                        n += store.add_pulls(recs, src=(label or src["name"]))
+                else:
+                    raw = payload.get("logs", []) or []
+                    recs = [r for r in (parse_line(ln, pnets) for ln in raw) if r]
+                    n = store.add_pulls(recs, src=src["name"])
+                    sent = len(raw)
                 met = payload.get("metrics", {}) or {}
                 log_ok = bool(payload.get("log_ok"))
                 forced = bool(payload.get("forced"))

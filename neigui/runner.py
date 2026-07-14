@@ -12,20 +12,41 @@ from .log_parser import load_proxy_nets, parse_line
 from .store import Store
 
 
-def _expand_paths(spec: str):
-    """spec 可多行, 每行一个路径或通配(如 /www/wwwlogs/*sub.log)。展开成实际文件列表。"""
-    files = []
+def _parse_spec(spec: str):
+    """每行 '路径' 或 '路径 | 归属标签'。返回 [(路径, 标签), ...]。"""
+    out = []
     for line in (spec or "").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        if os.path.isdir(line):
-            files.extend(glob.glob(os.path.join(line, "*.log")))
-        elif any(ch in line for ch in "*?["):
-            files.extend(glob.glob(line))
-        elif os.path.isfile(line):
-            files.append(line)
+        label = ""
+        if "|" in line:
+            p, _, lb = line.partition("|")
+            line, label = p.strip(), lb.strip()
+        if line:
+            out.append((line, label))
+    return out
+
+
+def _expand_one(pathspec: str):
+    """单条路径: 目录→目录下 *.log; 通配→展开; 文件→自身。"""
+    if os.path.isdir(pathspec):
+        files = glob.glob(os.path.join(pathspec, "*.log"))
+    elif any(ch in pathspec for ch in "*?["):
+        files = glob.glob(pathspec)
+    elif os.path.isfile(pathspec):
+        files = [pathspec]
+    else:
+        files = []
     return sorted(set(os.path.abspath(f) for f in files))
+
+
+def _expand_paths(spec: str):
+    """展开所有行(忽略标签), 返回实际文件列表。"""
+    files = []
+    for pathspec, _ in _parse_spec(spec):
+        files.extend(_expand_one(pathspec))
+    return sorted(set(files))
 
 
 def _ingest_one(store: Store, path: str, reset: bool, src: str = None, proxy_nets=None) -> int:
@@ -55,9 +76,12 @@ def ingest_logfile(store: Store, path_spec: str, reset: bool = False,
     """增量导入日志。path_spec 支持多行/通配(按日期滚动的日志用 *sub.log 匹配)。
     返回 (新增条数, 匹配文件数, 0)。每个文件各自记录 offset。"""
     proxy_nets = load_proxy_nets()
-    files = _expand_paths(path_spec)
-    total = sum(_ingest_one(store, f, reset, src, proxy_nets) for f in files)
-    return total, len(files), 0
+    total = nfiles = 0
+    for pathspec, label in _parse_spec(path_spec):
+        for f in _expand_one(pathspec):
+            total += _ingest_one(store, f, reset, label or src, proxy_nets)
+            nfiles += 1
+    return total, nfiles, 0
 
 
 def sync_v2board(store: Store, cfg: dict, panel: str = None):

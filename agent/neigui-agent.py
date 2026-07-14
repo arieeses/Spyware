@@ -90,20 +90,31 @@ def metrics():
 import glob as _glob
 
 
-def expand_paths(spec):
-    """spec 可多行; 每行为文件/通配/目录。目录→目录下 *.log; 通配→展开。返回实际文件列表。"""
-    files = []
+def parse_spec(spec):
+    """每行 '路径' 或 '路径 | 归属标签'。返回 [(路径spec, 标签), ...]。"""
+    out = []
     for line in (spec or "").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        if os.path.isdir(line):
-            files.extend(_glob.glob(os.path.join(line, "*.log")))
-        elif any(ch in line for ch in "*?["):
-            files.extend(_glob.glob(line))
-        elif os.path.isfile(line):
-            files.append(line)
-    return sorted(set(files))
+        label = ""
+        if "|" in line:
+            p, _, lb = line.partition("|")
+            line, label = p.strip(), lb.strip()
+        if line:
+            out.append((line, label))
+    return out
+
+
+def expand_one(pathspec):
+    """单条路径展开: 目录→目录下 *.log; 通配→展开; 文件→自身。"""
+    if os.path.isdir(pathspec):
+        return sorted(_glob.glob(os.path.join(pathspec, "*.log")))
+    if any(ch in pathspec for ch in "*?["):
+        return sorted(_glob.glob(pathspec))
+    if os.path.isfile(pathspec):
+        return [pathspec]
+    return []
 
 
 def read_new_file(path, st):
@@ -127,18 +138,20 @@ def read_new_file(path, st):
 
 
 def collect(spec, state):
-    """按 spec 读所有匹配文件的新增行(state 按文件路径分别记 offset)。
-    返回 (行列表, 新state, 是否有可读文件)。"""
-    files = expand_paths(spec)
-    lines, newstate = [], dict(state)
-    for fp in files:
-        try:
-            fl, fst = read_new_file(fp, state.get(fp, {}))
-            lines.extend(fl)
-            newstate[fp] = fst
-        except Exception:
-            pass
-    return lines, newstate, bool(files)
+    """按 spec 读新增行, 按「归属标签」分组(state 按文件路径分别记 offset)。
+    返回 (groups={标签:[行]}, 新state, 是否有可读文件)。无标签的用空串 key。"""
+    groups, newstate, has_file = {}, dict(state), False
+    for pathspec, label in parse_spec(spec):
+        for fp in expand_one(pathspec):
+            has_file = True
+            try:
+                fl, fst = read_new_file(fp, state.get(fp, {}))
+                newstate[fp] = fst
+                if fl:
+                    groups.setdefault(label, []).extend(fl)
+            except Exception:
+                pass
+    return groups, newstate, has_file
 
 
 def main():
@@ -177,9 +190,10 @@ def main():
                 state = {}
         now = time.time()
         if force or (now - last_report) >= report_interval:
-            lines, newstate, has_file = collect(log_path, state)
+            groups, newstate, has_file = collect(log_path, state)
+            lines = [ln for v in groups.values() for ln in v]  # 兼容旧中央
             ok = http_post(f"{a.master}/api/agent/report?token={a.token}",
-                           {"logs": lines, "metrics": metrics(),
+                           {"logs": lines, "groups": groups, "metrics": metrics(),
                             "log_ok": has_file, "log_path": log_path,
                             "forced": force})
             if ok:
