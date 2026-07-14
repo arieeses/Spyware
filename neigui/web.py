@@ -111,23 +111,38 @@ done
 # 兜底: 杀掉任何游离的 agent.py 进程(手动跑起来的)
 pkill -f "spyware-agent/agent.py" 2>/dev/null || true
 pkill -f "neigui-agent" 2>/dev/null || true
+PY="$(command -v python3 || command -v python || true)"
+if [ -z "$PY" ]; then
+  echo "错误: 未找到 python3。请先安装, 如 Debian/Ubuntu: apt -y install python3 ; CentOS: yum -y install python3"
+  exit 1
+fi
 mkdir -p /opt/spyware-agent
 curl -fsS "$MASTER/agent/agent.py" -o /opt/spyware-agent/agent.py
+# 校验下载到的是 python 脚本而非错误页(WAF/404 可能返回 HTML)
+head -1 /opt/spyware-agent/agent.py | grep -q "python" || {
+  echo "错误: 下载到的 agent.py 不是脚本(可能被 WAF 拦截或地址错误), 内容开头:"; head -3 /opt/spyware-agent/agent.py; exit 1; }
 cat >/etc/systemd/system/spyware-agent.service <<UNIT
 [Unit]
 Description=Spyware Agent (探针)
 After=network.target
 [Service]
-ExecStart=/usr/bin/python3 /opt/spyware-agent/agent.py --master $MASTER --token $TOKEN --log $LOG --state /opt/spyware-agent/state.json
+ExecStart=$PY /opt/spyware-agent/agent.py --master $MASTER --token $TOKEN --log $LOG --state /opt/spyware-agent/state.json
 Restart=always
+RestartSec=3
 [Install]
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
 systemctl enable spyware-agent 2>/dev/null || true
 systemctl restart spyware-agent   # restart 而非 start: 确保加载最新 agent.py
-echo "spyware-agent 已安装并启动 (log: $LOG)"
-echo "自检: $(systemctl is-active spyware-agent) · 进程数 $(pgrep -fc 'spyware-agent/agent.py')"
+sleep 2
+echo "spyware-agent 已安装 (python: $PY, log: $LOG)"
+if systemctl is-active --quiet spyware-agent; then
+  echo "自检: 正常运行 · 进程数 $(pgrep -fc 'spyware-agent/agent.py')"
+else
+  echo "自检: 启动失败 ✗  最近日志:"
+  journalctl -u spyware-agent -n 12 --no-pager 2>/dev/null || tail -n 12 /var/log/syslog 2>/dev/null
+fi
 """
 
 # 分级入口域名: (key, 名称, 说明)
