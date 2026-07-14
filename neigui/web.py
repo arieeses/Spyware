@@ -103,9 +103,14 @@ set -e
 MASTER="__MASTER__"
 TOKEN="__TOKEN__"
 LOG="${LOG:-/www/wwwlogs/neigui_sub.log}"
-# 兼容旧版: 若装过 neigui-agent 先移除
-systemctl disable --now neigui-agent 2>/dev/null || true
-rm -f /etc/systemd/system/neigui-agent.service 2>/dev/null || true
+# 先停掉所有旧版/同名探针, 避免多个进程同时上报(旧进程会读默认路径→"未读到日志文件")
+for SVC in spyware-agent neigui-agent spywarp; do
+  systemctl disable --now "$SVC" 2>/dev/null || true
+  rm -f "/etc/systemd/system/$SVC.service" 2>/dev/null || true
+done
+# 兜底: 杀掉任何游离的 agent.py 进程(手动跑起来的)
+pkill -f "spyware-agent/agent.py" 2>/dev/null || true
+pkill -f "neigui-agent" 2>/dev/null || true
 mkdir -p /opt/spyware-agent
 curl -fsS "$MASTER/agent/agent.py" -o /opt/spyware-agent/agent.py
 cat >/etc/systemd/system/spyware-agent.service <<UNIT
@@ -119,8 +124,10 @@ Restart=always
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable --now spyware-agent
+systemctl enable spyware-agent 2>/dev/null || true
+systemctl restart spyware-agent   # restart 而非 start: 确保加载最新 agent.py
 echo "spyware-agent 已安装并启动 (log: $LOG)"
+echo "自检: $(systemctl is-active spyware-agent) · 进程数 $(pgrep -fc 'spyware-agent/agent.py')"
 """
 
 # 分级入口域名: (key, 名称, 说明)
