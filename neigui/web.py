@@ -133,6 +133,7 @@ RestartSec=3
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
+systemctl reset-failed spyware-agent 2>/dev/null || true   # 清除之前快速失败的限流
 systemctl enable spyware-agent 2>/dev/null || true
 systemctl restart spyware-agent   # restart 而非 start: 确保加载最新 agent.py
 sleep 2
