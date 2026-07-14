@@ -672,7 +672,17 @@ def _log_modals(panels=None) -> str:
     panels = panels or []
     add_sel = _panel_options(panels)
     edit_sel = _panel_options(panels, "el_panel")
-    panel_hint = '<div class="dim small" style="margin-top:4px">选归属的前端面板, 日志库按它分类; 一台机多站点各建一个日志源、分别选面板即可。</div>'
+    plist = ("、".join(esc(p) for p in panels)) if panels else "(还没建前端面板)"
+    # 每行 "路径 | 面板名" 单独归属; 末尾没写 | 的行用下面「默认归属面板」
+    path_hint = (
+        '<div class="dim small" style="margin-top:4px">'
+        '每行一个路径; 目录=读其下所有 .log; 通配用 *。<br>'
+        '<b>一个源里多个站点分别归属</b>: 每行末尾加 <code>| 面板名</code> 指定该路径归哪个前端面板, 例:<br>'
+        '<code>/opt/1panel/www/sites/UYUY/log | 彩虹云</code><br>'
+        '<code>/opt/1panel/www/sites/feiniao/log | 飞鸟</code><br>'
+        f'没写 <code>|</code> 的行则用上面的「默认归属面板」。可用面板: <b>{plist}</b>。</div>')
+    panel_hint = ('<div class="dim small" style="margin-top:4px">'
+                  '整源默认归属(路径行没单独写 <code>| 面板名</code> 时用它)。</div>')
     return """
     <div class="modal-bg" id="addLog"><div class="modal">
       <h3>添加日志源</h3>
@@ -683,13 +693,13 @@ def _log_modals(panels=None) -> str:
       <form method="post" action="/sources/add">
         <input type="hidden" name="type" value="logfile">
         <input type="hidden" name="mode" id="logMode" value="agent">
-        <div class="mfield"><input name="name" placeholder="名称, 如: 机场A" required></div>
-        <div class="mfield"><label class="dim small">归属前端面板</label>""" + add_sel + panel_hint + """</div>
+        <div class="mfield"><input name="name" placeholder="名称, 如: VPS-1" required></div>
+        <div class="mfield"><label class="dim small">默认归属前端面板</label>""" + add_sel + panel_hint + """</div>
         <div class="mfield" id="lf_agenttip"><div class="dim small">探针: 添加后点该行「复制安装命令」在面板服务器执行; 日志路径/间隔装好后在该行编辑。</div></div>
         <div class="mfield" id="lf_path" style="display:none">
-          <label class="dim small">日志路径(可多行/通配/目录; 目录会读其下所有 .log)</label>
-          <textarea name="path" id="lf_path_i" rows="3" placeholder="/opt/1panel/www/sites/A/log&#10;/www/wwwlogs/*sub.log"></textarea>
-          <div class="dim small" style="margin-top:4px">填目录=读该目录下所有 .log。同一源的日志都归到上面选的面板。</div>
+          <label class="dim small">日志路径</label>
+          <textarea name="path" id="lf_path_i" rows="4" placeholder="/opt/1panel/www/sites/UYUY/log | 彩虹云&#10;/opt/1panel/www/sites/feiniao/log | 飞鸟"></textarea>
+          """ + path_hint + """
         </div>
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('addLog')">取消</button><button class="btn">添加</button></div>
       </form>
@@ -699,10 +709,10 @@ def _log_modals(panels=None) -> str:
       <form method="post" action="/sources/edit">
         <input type="hidden" name="id" id="el_id">
         <div class="mfield"><label class="dim small">名称</label><input name="name" id="el_name"></div>
-        <div class="mfield"><label class="dim small">归属前端面板</label>""" + edit_sel + panel_hint + """</div>
+        <div class="mfield"><label class="dim small">默认归属前端面板</label>""" + edit_sel + panel_hint + """</div>
         <div class="mfield"><label class="dim small" id="el_lbl">日志路径</label>
-          <textarea name="path" id="el_path" rows="3" placeholder="/opt/1panel/www/sites/A/log"></textarea>
-          <div class="dim small" style="margin-top:4px">每行一个; 填<b>目录</b>=读其下所有 .log; 通配用 *(如 <code>2026*su.log</code>)。本源日志归到上面选的面板。</div></div>
+          <textarea name="path" id="el_path" rows="4" placeholder="/opt/1panel/www/sites/UYUY/log | 彩虹云&#10;/opt/1panel/www/sites/feiniao/log | 飞鸟"></textarea>
+          """ + path_hint + """</div>
         """ + _sync_field("el") + """
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('editLog')">取消</button><button class="btn">保存</button></div>
       </form>
