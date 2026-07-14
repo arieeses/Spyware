@@ -1801,8 +1801,9 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .modalx {{ position:absolute; top:10px; right:12px; width:30px; height:30px; border:0; background:transparent;
     font-size:22px; line-height:1; color:#98a0ab; cursor:pointer; border-radius:6px; z-index:2; }}
   .modalx:hover {{ background:#eceff3; color:#333; }}
-  /* 滚动放内层, 靠弹窗内边距把滚动条与圆角错开(外框圆角完整) */
-  .modalscroll {{ max-height:74vh; overflow-y:auto; overflow-x:hidden; }}
+  /* 滚动放内层(外框圆角完整); 隐藏滚动条但仍可滚(滚轮/触控板/拖动内容) */
+  .modalscroll {{ max-height:74vh; overflow-y:auto; overflow-x:hidden; scrollbar-width:none; -ms-overflow-style:none; }}
+  .modalscroll::-webkit-scrollbar {{ width:0; height:0; }}
   @media (max-width:560px) {{ .udgrid {{ grid-template-columns:1fr; }} }}
   .pager {{ display:flex; gap:4px; align-items:center; justify-content:flex-end; margin-top:14px; flex-wrap:wrap; }}
   .pg {{ min-width:30px; height:30px; padding:0 8px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:6px; text-decoration:none; color:var(--txt); font-size:13px; }}
