@@ -675,16 +675,16 @@ def _log_modals(panels=None) -> str:
     plist = ("、".join(esc(p) for p in panels)) if panels else "(还没建前端面板)"
     # 每行 "路径 | 面板名" 单独归属; 末尾没写 | 的行用下面「默认归属面板」
     path_hint = (
-        '<div class="dim small" style="margin-top:4px">'
-        '每行一个路径; 目录=读其下所有 .log; 通配用 *。<br>'
-        '<b>一个源里多个站点分别归属</b>: 每行末尾加 <code>| 面板名</code> 指定该路径归哪个前端面板, 例:<br>'
-        '<code>/opt/1panel/www/sites/UYUY/log | 彩虹云</code><br>'
-        '<code>/opt/1panel/www/sites/feiniao/log | 飞鸟</code><br>'
-        f'没写 <code>|</code> 的行则用上面的「默认归属面板」。可用面板: <b>{plist}</b>。</div>')
+        '<div class="dim small" style="margin-top:4px;line-height:1.7">'
+        '每行一个路径; 填目录=读其下所有 .log; 通配用 *。<br>'
+        '一个源里多个站点分别归属: 行末加 <code>| 面板名</code> 指定该路径归哪个前端面板。<br>'
+        f'没写 <code>|</code> 的行用上面的「默认归属面板」。可选面板: <b>{plist}</b>。</div>')
     panel_hint = ('<div class="dim small" style="margin-top:4px">'
-                  '整源默认归属(路径行没单独写 <code>| 面板名</code> 时用它)。</div>')
+                  '路径行没单独写 <code>| 面板名</code> 时用它。</div>')
+    ph = "&#47;path&#47;siteA&#47;log | 面板A&#10;&#47;path&#47;siteB&#47;log | 面板B"
+    wide = 'style="width:min(680px,95vw)"'
     return """
-    <div class="modal-bg" id="addLog"><div class="modal">
+    <div class="modal-bg" id="addLog"><div class="modal" """ + wide + """>
       <h3>添加日志源</h3>
       <div class="segbar" style="margin:10px 0">
         <button type="button" id="lm_a" class="seg active" onclick="logMode('agent')">探针接入</button>
@@ -698,20 +698,20 @@ def _log_modals(panels=None) -> str:
         <div class="mfield" id="lf_agenttip"><div class="dim small">探针: 添加后点该行「复制安装命令」在面板服务器执行; 日志路径/间隔装好后在该行编辑。</div></div>
         <div class="mfield" id="lf_path" style="display:none">
           <label class="dim small">日志路径</label>
-          <textarea name="path" id="lf_path_i" rows="4" placeholder="/opt/1panel/www/sites/UYUY/log | 彩虹云&#10;/opt/1panel/www/sites/feiniao/log | 飞鸟"></textarea>
+          <textarea name="path" id="lf_path_i" rows="4" placeholder=\"""" + ph + """\"></textarea>
           """ + path_hint + """
         </div>
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('addLog')">取消</button><button class="btn">添加</button></div>
       </form>
     </div></div>
-    <div class="modal-bg" id="editLog"><div class="modal">
+    <div class="modal-bg" id="editLog"><div class="modal" """ + wide + """>
       <h3>编辑日志源</h3>
       <form method="post" action="/sources/edit">
         <input type="hidden" name="id" id="el_id">
         <div class="mfield"><label class="dim small">名称</label><input name="name" id="el_name"></div>
         <div class="mfield"><label class="dim small">默认归属前端面板</label>""" + edit_sel + panel_hint + """</div>
         <div class="mfield"><label class="dim small" id="el_lbl">日志路径</label>
-          <textarea name="path" id="el_path" rows="4" placeholder="/opt/1panel/www/sites/UYUY/log | 彩虹云&#10;/opt/1panel/www/sites/feiniao/log | 飞鸟"></textarea>
+          <textarea name="path" id="el_path" rows="4" placeholder=\"""" + ph + """\"></textarea>
           """ + path_hint + """</div>
         """ + _sync_field("el") + """
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('editLog')">取消</button><button class="btn">保存</button></div>
