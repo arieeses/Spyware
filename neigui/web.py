@@ -1288,9 +1288,13 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     counts = store.score_counts()      # 直接读物化评分, 与总用户数解耦
     excluded = counts["excluded"]
 
-    # 搜索: token / 邮箱 / IP
+    # 搜索: token / 邮箱 / IP / UA / ASN
     search = (search or "").strip()
-    ip_tokens = store.tokens_by_ip(search) if search else set()
+    if search:
+        from .asn import get_asndb
+        ip_tokens = store.tokens_by_search(search, get_asndb())
+    else:
+        ip_tokens = set()
 
     def chip(label, val, color):
         return f'<span class="chip"><b style="color:{color}">{val}</b> {label}</span>'
@@ -1394,7 +1398,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         f'<input type="hidden" name="level" value="{esc(flt or "all")}">'
         f'<input type="hidden" name="panel" value="{esc(panel_flt or "all")}">'
         f'<input type="hidden" name="size" value="{esc(size)}">'
-        f'<input name="q" value="{esc(search)}" placeholder="搜索 token / 邮箱 / IP" style="width:200px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
+        f'<input name="q" value="{esc(search)}" placeholder="搜索 token/邮箱/IP/UA/ASN" style="width:220px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
         f'<button class="btn sm">搜索</button>'
         + (f'<a class="btn sm ghost" href="/risk?level={quote(flt or "all")}&panel={pf}">清除</a>' if search else '')
         + '</form>')

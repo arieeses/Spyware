@@ -393,6 +393,34 @@ class Store:
             "SELECT DISTINCT token FROM pulls WHERE ip LIKE ?", (f"%{ip_like}%",)).fetchall()
         return {r["token"] for r in rows}
 
+    def tokens_by_search(self, q: str, asndb=None):
+        """在拉取日志里按 IP / UA 模糊匹配, 并可按 ASN 号或组织名匹配, 返回命中 token 集。"""
+        q = (q or "").strip()
+        if not q:
+            return set()
+        like = f"%{q}%"
+        toks = {r["token"] for r in self.conn.execute(
+            "SELECT DISTINCT token FROM pulls WHERE ip LIKE ? OR ua LIKE ?", (like, like)).fetchall()}
+        # ASN 匹配: "AS45090" / "45090" 按号, 其余按组织名子串; 解析各不同 IP(bisect, 很快)
+        if asndb is not None:
+            ql = q.lower()
+            want_num = ql[2:] if ql.startswith("as") and ql[2:].isdigit() else (ql if ql.isdigit() else None)
+            match_ips = []
+            for r in self.conn.execute(
+                    "SELECT DISTINCT ip FROM pulls WHERE ip IS NOT NULL AND ip<>''").fetchall():
+                asn, org = asndb.lookup(r["ip"])
+                if not asn:
+                    continue
+                if (want_num and str(asn) == want_num) or (org and ql in org.lower()):
+                    match_ips.append(r["ip"])
+            for i in range(0, len(match_ips), 400):   # 分批 IN 查询, 避免占位符过多
+                chunk = match_ips[i:i + 400]
+                ph = ",".join("?" * len(chunk))
+                for r in self.conn.execute(
+                        f"SELECT DISTINCT token FROM pulls WHERE ip IN ({ph})", chunk).fetchall():
+                    toks.add(r["token"])
+        return toks
+
     def ip_panel_map(self) -> dict:
         """每个拉取 IP 出现在哪些面板(src)。用于「跨面板同IP」信号。"""
         out: dict = {}
