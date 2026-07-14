@@ -25,7 +25,9 @@ class V2BoardConnector:
     def __init__(self, cfg: dict):
         self.cfg = cfg
 
-    def _connect(self):
+    def _connect(self, read_timeout=None):
+        """read_timeout=None: 不限(批量同步用); 详情页订单查询传小值快速失败。
+        connect_timeout 固定 5s(仅约束建连, 库不可达时不长时间卡住)。"""
         try:
             import pymysql
         except ImportError as e:
@@ -39,9 +41,9 @@ class V2BoardConnector:
             database=c["database"],
             charset="utf8mb4",
             cursorclass=pymysql.cursors.DictCursor,
-            connect_timeout=5,   # 避免详情页/同步在库不可达时长时间卡住
-            read_timeout=10,
-            write_timeout=10,
+            connect_timeout=5,
+            read_timeout=read_timeout,
+            write_timeout=30,
         )
 
     # v2board/Xboard 的 v2_user 列名(可在面板"字段映射"里覆盖)
@@ -92,7 +94,7 @@ class V2BoardConnector:
     def query_orders(self, user_id, limit: int = 20):
         """实时查该用户订单(v2_order)。金额单位分→元。"""
         prefix = self.cfg.get("prefix", "v2_")
-        conn = self._connect()
+        conn = self._connect(read_timeout=8)  # 详情页要快, 慢就放弃
         out = []
         try:
             with conn.cursor() as cur:
