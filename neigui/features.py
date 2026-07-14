@@ -28,8 +28,11 @@ class TokenFeatures:
     time_days: int = 0            # 拉取覆盖的不同天数
     up30: int = 0                 # 近30天上行字节
     down30: int = 0               # 近30天下行字节
-    feature_hit: bool = False     # 命中内鬼特征库
+    feature_hit: bool = False     # 命中特征库(手工)
     feature_reason: str = ""
+    insider_hit: bool = False     # 与内鬼库已确认账号共用特征
+    insider_reason: str = ""
+    main_ip: Optional[str] = None  # 代表 IP(最近一次拉取), 供「同IP」下钻
     asn_type_counts: Dict[str, int] = field(default_factory=dict)
     hosting_ratio: float = 0.0
     self_ratio: float = 0.0
@@ -69,7 +72,7 @@ def build_features(token: str, pull_rows: List, user_row,
                    now: datetime = None, ip_panels: dict = None,
                    email_panels: dict = None, featlib=None,
                    burst_window: int = 120,
-                   night_start: int = 2, night_end: int = 6) -> TokenFeatures:
+                   night_start: int = 2, night_end: int = 6, insiderlib=None) -> TokenFeatures:
     f = TokenFeatures(token=token)
     f.pull_count = len(pull_rows)
 
@@ -80,6 +83,7 @@ def build_features(token: str, pull_rows: List, user_row,
     tool = client = 0
     times: List[datetime] = []
     tua: List = []            # (时间, UA) 对, 供短时多UA轮换判定
+    _latest = None            # (dt, ip) 最近一次拉取, 取代表 IP
     if now is None:
         now = datetime.now(timezone.utc)
     win_start = now - timedelta(hours=max(1, window_hours))
@@ -112,6 +116,8 @@ def build_features(token: str, pull_rows: List, user_row,
                 tua.append((dt, r["ua"]))
             if dt >= win_start and ip:
                 recent_ips.add(ip)
+            if ip and (_latest is None or dt >= _latest[0]):
+                _latest = (dt, ip)
             d8 = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
             bh = d8.astimezone(_BEIJING).hour   # 北京时间小时
             if night_start <= bh < night_end:
@@ -186,11 +192,20 @@ def build_features(token: str, pull_rows: List, user_row,
         if email_panels and f.email:
             f.email_panels = len(email_panels.get(f.email, set()))
 
-    # 内鬼特征库匹配(IP/UA/ASN/邮箱); 无拉取时也能靠邮箱命中
+    if _latest:
+        f.main_ip = _latest[1]
+    asndb = getattr(ipc, "asndb", None)
+    # 特征库匹配(手工登记的 IP/UA/ASN/邮箱); 无拉取时也能靠邮箱命中
     if featlib is not None and not featlib.empty:
-        reason = featlib.match(ips, uas, f.email, getattr(ipc, "asndb", None))
+        reason = featlib.match(ips, uas, f.email, asndb)
         if reason:
             f.feature_hit = True
             f.feature_reason = reason
+    # 内鬼库匹配(与已确认内鬼共用特征)
+    if insiderlib is not None and not insiderlib.empty:
+        reason = insiderlib.match(ips, uas, f.email, asndb)
+        if reason:
+            f.insider_hit = True
+            f.insider_reason = reason
 
     return f

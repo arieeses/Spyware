@@ -47,7 +47,8 @@ class Weights:
     email_multi_panel: float = 20.0  # 同一邮箱在多个面板注册(批量身份)
     fixed_schedule: float = 12.0     # 拉取时刻固定在一天内某窄时段(cron/自动化)
     traffic_symmetry: float = 18.0   # 近30天上下行接近对称(中转/攻击, 非真人下载型)
-    feature_lib: float = 50.0        # 命中手工登记的内鬼特征库(IP/UA/ASN/邮箱)
+    feature_lib: float = 50.0        # 命中手工登记的特征库(IP/UA/ASN/邮箱)
+    insider_lib: float = 60.0        # 与内鬼库已确认账号共用特征(同伙, 强)
     night_pull: float = 12.0         # 北京时间深夜(默认2-6点)仍在拉订阅(真人多在睡觉)
     blacklist_hit: float = 60.0      # 命中黑名单(IP/UA/ASN, 强, 直接判高危)
     # —— 节点侧信号(需节点日志, 增量5接入, 暂占位) ——

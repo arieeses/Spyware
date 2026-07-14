@@ -150,35 +150,60 @@ class Blacklist:
 
 
 class FeatureLib:
-    """内鬼特征库: 手工登记的 IP/CIDR、UA(正则/子串)、ASN 号、邮箱(子串)。命中即算内鬼特征。"""
+    """特征库匹配器: IP/CIDR、UA(正则/子串)、ASN 号、邮箱(子串)。命中即算特征命中。
+    默认从手工「特征库」(signatures)加载; from_insiders() 从「内鬼库」账号快照加载。"""
 
-    def __init__(self, store):
+    def __init__(self, store=None, _rows=None):
         self.ip_nets: List = []
         self.ua_pats: List[str] = []
         self.asns = set()
         self.emails: List[str] = []
-        try:
-            rows = store.list_signatures()
-        except Exception:  # noqa: BLE001
-            rows = []
-        for r in rows:
-            k, v = r["kind"], (r["value"] or "").strip()
+        if _rows is None:
+            try:
+                _rows = [(r["kind"], r["value"]) for r in store.list_signatures()]
+            except Exception:  # noqa: BLE001
+                _rows = []
+        for k, v in _rows:
+            v = (v or "").strip()
             if not v:
                 continue
-            if k == "ip":
-                try:
-                    self.ip_nets.append(ipaddress.ip_network(v, strict=False))
-                except ValueError:
-                    pass
-            elif k == "ua":
-                self.ua_pats.append(v)
-            elif k == "asn":
-                vv = v.lower().lstrip("a").lstrip("s")
-                if vv.isdigit():
-                    self.asns.add(int(vv))
-            elif k == "email":
-                self.emails.append(v.lower())
+            self._add(k, v)
         self.empty = not (self.ip_nets or self.ua_pats or self.asns or self.emails)
+
+    def _add(self, k, v):
+        if k == "ip":
+            try:
+                self.ip_nets.append(ipaddress.ip_network(v, strict=False))
+            except ValueError:
+                pass
+        elif k == "ua":
+            self.ua_pats.append(v)
+        elif k == "asn":
+            vv = str(v).lower().lstrip("a").lstrip("s")
+            if vv.isdigit():
+                self.asns.add(int(vv))
+        elif k == "email":
+            self.emails.append(str(v).lower())
+
+    @classmethod
+    def from_insiders(cls, store):
+        """从内鬼库账号的快照特征(ips/uas/asns/emails)构建匹配器。"""
+        import json as _json
+        rows = []
+        try:
+            insiders = store.list_insiders()
+        except Exception:  # noqa: BLE001
+            insiders = []
+        for r in insiders:
+            for ip in _json.loads(r["ips"] or "[]"):
+                rows.append(("ip", ip))
+            for ua in _json.loads(r["uas"] or "[]"):
+                rows.append(("ua", "^" + re.escape(ua) + "$"))   # 精确整串匹配, 避免 clash 等泛化 UA 误伤
+            for asn in _json.loads(r["asns"] or "[]"):
+                rows.append(("asn", asn))
+            if r["email"]:
+                rows.append(("email", r["email"]))
+        return cls(_rows=rows)
 
     def match(self, ips, uas, email, asndb=None) -> str:
         """返回命中原因(空串=未命中)。"""

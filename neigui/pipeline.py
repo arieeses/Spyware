@@ -101,7 +101,8 @@ def _score_row(r: RiskResult):
             r.pull_count, r.traffic_bytes,
             r.created_at.isoformat() if r.created_at else None,
             r.expired_at.isoformat() if r.expired_at else None,
-            r.last_pull.isoformat() if r.last_pull else None)
+            r.last_pull.isoformat() if r.last_pull else None,
+            r.main_ip)
 
 
 def analyze(store: Store, cfg: Config = None) -> List[RiskResult]:
@@ -119,7 +120,9 @@ def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
     now = datetime.now(timezone.utc)
     since_iso = (now - timedelta(hours=max(1, win_h))).isoformat()
     from .enrich import FeatureLib
-    featlib = FeatureLib(store)                   # 内鬼特征库(手工登记)
+    featlib = FeatureLib(store)                       # 特征库(手工登记)
+    insiderlib = FeatureLib.from_insiders(store)      # 内鬼库(已确认账号快照特征)
+    insiders = store.insider_tokens()                 # 已移入内鬼库的账号: 不再评分/进名单
     ip_users = store.ip_user_counts(since_iso)   # 窗口内 IP→不同账号数
     ip_panels = store.ip_panel_map()             # IP→面板集合(跨面板同IP)
     email_panels = store.email_panel_map()       # 邮箱→面板集合(同邮箱多面板)
@@ -129,19 +132,21 @@ def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
     bw = cfg.thresholds.burst_ua_window
     ns, ne = cfg.thresholds.night_start_hour, cfg.thresholds.night_end_hour
     for token in pull_tokens:
+        if token in insiders:
+            continue
         feats = build_features(token, store.pulls_for(token), store.user(token), ipc, uac, bl,
                                ip_users=ip_users, window_hours=win_h, now=now,
                                ip_panels=ip_panels, email_panels=email_panels, featlib=featlib,
-                               burst_window=bw, night_start=ns, night_end=ne)
+                               burst_window=bw, night_start=ns, night_end=ne, insiderlib=insiderlib)
         results.append(score_token(feats, cfg, off))
     # 同步来但暂无拉取日志的用户: 仍按"画像信号"评分(如「有效期内零流量新号」重点排查),
     # 无拉取所以 IP/UA/ASN 等日志类信号不触发。空拉取的 build_features 很轻。
     for u in store.all_users():
-        if u["token"] in pull_tokens:
+        if u["token"] in pull_tokens or u["token"] in insiders:
             continue
         feats = build_features(u["token"], [], u, ipc, uac, bl,
                                ip_users=ip_users, window_hours=win_h, now=now,
-                               email_panels=email_panels, featlib=featlib)
+                               email_panels=email_panels, featlib=featlib, insiderlib=insiderlib)
         results.append(score_token(feats, cfg, off))
     results.sort(key=lambda r: r.score, reverse=True)
     return results

@@ -35,6 +35,7 @@ class RiskResult:
     online_ips: int = 0
     ip_shared_users: int = 0
     pull_count: int = 0
+    main_ip: Optional[str] = None
     last_pull: Optional[datetime] = None
     traffic_bytes: int = 0
     created_at: Optional[datetime] = None
@@ -59,7 +60,7 @@ def _display(f: TokenFeatures) -> dict:
     return dict(email=f.email, user_id=f.user_id, panel=f.panel, plan=f.plan,
                 distinct_ips=f.distinct_ips, distinct_uas=f.distinct_uas,
                 online_ips=f.online_ips, ip_shared_users=f.ip_shared_users,
-                pull_count=f.pull_count, last_pull=f.last_pull,
+                pull_count=f.pull_count, last_pull=f.last_pull, main_ip=f.main_ip,
                 traffic_bytes=f.traffic_bytes, created_at=f.created_at, expired_at=f.expired_at)
 
 
@@ -151,10 +152,15 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
             f"北京时间 {th.night_start_hour}-{th.night_end_hour} 点内拉取 {f.night_pulls} 次, "
             "非真人作息, 疑似自动化", tag="深夜拉取"))
 
-    # 命中内鬼特征库(手工登记的 IP/UA/ASN/邮箱): 强信号
+    # 命中特征库(手工登记的 IP/UA/ASN/邮箱): 强信号
     if on("feature_lib") and f.feature_hit:
-        signals.append(Signal("命中内鬼特征库", w.feature_lib,
-            f.feature_reason or "命中内鬼特征库", tag="内鬼特征"))
+        signals.append(Signal("命中特征库", w.feature_lib,
+            f.feature_reason or "命中特征库", tag="特征命中"))
+
+    # 命中内鬼库(与已确认内鬼共用 IP/UA/ASN/邮箱): 强信号(同伙)
+    if on("insider_lib") and f.insider_hit:
+        signals.append(Signal("命中内鬼库", w.insider_lib,
+            f.insider_reason or "与已确认内鬼特征相同", tag="内鬼同伙"))
 
     # 11. 跨面板同IP: 该 token 的拉取 IP 横跨多个前端面板(一台机器打多个机场)
     if on("cross_panel_ip") and f.cross_panel_ips >= th.cross_panel_ip_min:

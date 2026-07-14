@@ -118,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_scores_score ON scores(score DESC);
 CREATE INDEX IF NOT EXISTS idx_scores_level ON scores(level, score DESC);
 CREATE INDEX IF NOT EXISTS idx_scores_panel ON scores(panel);
 
--- 内鬼特征库: 手工登记已知内鬼特征(IP/UA/ASN/邮箱), 命中即加分
+-- 特征库: 手工登记特征(IP/UA/ASN/邮箱), 命中即加分
 CREATE TABLE IF NOT EXISTS signatures (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   kind       TEXT,           -- ip | ua | asn | email
@@ -126,11 +126,23 @@ CREATE TABLE IF NOT EXISTS signatures (
   note       TEXT,
   created_at TEXT
 );
+
+-- 内鬼库: 一键移入的已确认内鬼账号(快照其IP/UA/ASN/邮箱, 继续反哺检测); 移入后不再进风险名单
+CREATE TABLE IF NOT EXISTS insiders (
+  token      TEXT PRIMARY KEY,
+  email      TEXT,
+  panel      TEXT,
+  ips        TEXT,           -- JSON 数组
+  uas        TEXT,           -- JSON 数组
+  asns       TEXT,           -- JSON 数组(ASN 号)
+  note       TEXT,
+  added_at   TEXT
+);
 """
 
 _SCORE_COLS = ("token", "score", "level", "excluded", "tags", "signals", "email", "user_id",
                "panel", "plan", "distinct_ips", "online_ips", "distinct_uas", "ip_shared_users",
-               "pull_count", "traffic_bytes", "created_at", "expired_at", "last_pull")
+               "pull_count", "traffic_bytes", "created_at", "expired_at", "last_pull", "main_ip")
 
 
 def _row_to_result(row):
@@ -153,6 +165,7 @@ def _row_to_result(row):
                                s.get("detail", ""), s.get("tag", "")))
     except (ValueError, TypeError):
         pass
+    cols = row.keys()
     return RiskResult(
         row["token"], row["score"], row["level"], bool(row["excluded"]), signals=sigs,
         email=row["email"], user_id=row["user_id"], panel=row["panel"], plan=row["plan"],
@@ -160,7 +173,8 @@ def _row_to_result(row):
         online_ips=row["online_ips"], ip_shared_users=row["ip_shared_users"],
         pull_count=row["pull_count"], traffic_bytes=row["traffic_bytes"],
         created_at=pdt(row["created_at"]), expired_at=pdt(row["expired_at"]),
-        last_pull=pdt(row["last_pull"]))
+        last_pull=pdt(row["last_pull"]),
+        main_ip=(row["main_ip"] if "main_ip" in cols else None))
 
 # 增量列(老库升级用, 新库 CREATE 后补齐)
 _MIGRATIONS = [
@@ -172,6 +186,7 @@ _MIGRATIONS = [
     "ALTER TABLE pulls ADD COLUMN src TEXT",
     "ALTER TABLE users ADD COLUMN up30 INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN down30 INTEGER DEFAULT 0",
+    "ALTER TABLE scores ADD COLUMN main_ip TEXT",
 ]
 
 
@@ -243,6 +258,11 @@ class Store:
         cur.executemany(f"INSERT INTO scores({','.join(_SCORE_COLS)}) VALUES({ph})", rows)
         self.conn.commit()
 
+    def delete_score(self, token: str) -> None:
+        """从物化评分表删除一个 token(移入内鬼库时立即生效, 不等后台重算)。"""
+        self.conn.execute("DELETE FROM scores WHERE token=?", (token,))
+        self.conn.commit()
+
     def score_counts(self) -> dict:
         out = {"高": 0, "中": 0, "低": 0, "正常": 0, "excluded": 0, "total": 0}
         for r in self.conn.execute("SELECT level, COUNT(*) c FROM scores GROUP BY level").fetchall():
@@ -258,9 +278,14 @@ class Store:
             "ORDER BY panel").fetchall()
         return [r[0] for r in rows]
 
-    def _scores_where(self, level, panel, search, ip_tokens):
+    def _scores_where(self, level, panel, search, ip_tokens, levels=None):
         clauses, args = [], []
-        if level in ("高", "中", "低", "正常"):
+        if levels:   # 导出: 多等级
+            ph = ",".join("?" * len(levels))
+            clauses.append(f"level IN ({ph})"); args += list(levels)
+        elif level == "排除":
+            clauses.append("excluded=1")
+        elif level in ("高", "中", "低", "正常"):
             clauses.append("level=?"); args.append(level)
         if panel and panel != "all":
             clauses.append("panel=?"); args.append(panel)
@@ -274,16 +299,24 @@ class Store:
             clauses.append(sub); args += a2
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), args
 
-    def count_scores(self, level="all", panel="all", search="", ip_tokens=None) -> int:
-        where, args = self._scores_where(level, panel, search, ip_tokens or set())
+    def count_scores(self, level="all", panel="all", search="", ip_tokens=None, levels=None) -> int:
+        where, args = self._scores_where(level, panel, search, ip_tokens or set(), levels)
         return self.conn.execute(f"SELECT COUNT(*) FROM scores{where}", args).fetchone()[0]
 
     def list_scores(self, level="all", panel="all", search="", ip_tokens=None,
-                    limit=10, offset=0):
-        where, args = self._scores_where(level, panel, search, ip_tokens or set())
+                    limit=10, offset=0, levels=None):
+        where, args = self._scores_where(level, panel, search, ip_tokens or set(), levels)
         q = f"SELECT * FROM scores{where} ORDER BY score DESC, token LIMIT ? OFFSET ?"
         rows = self.conn.execute(q, args + [limit, offset]).fetchall()
         return [_row_to_result(r) for r in rows]
+
+    def accounts_by_ip(self, ip: str, limit: int = 200):
+        """同IP下钻: 列出用该 IP 拉取过的账号(token/邮箱/面板)。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT p.token, u.email, u.panel FROM pulls p "
+            "LEFT JOIN users u ON u.token=p.token WHERE p.ip=? LIMIT ?", (ip, limit)).fetchall()
+        return [{"token": r["token"], "email": r["email"] or "", "panel": r["panel"] or ""}
+                for r in rows]
 
     def add_pulls(self, recs: Iterable[PullRecord], src: Optional[str] = None) -> int:
         n = 0
@@ -458,6 +491,33 @@ class Store:
         self.conn.execute("DELETE FROM signatures WHERE id=?", (sid,))
         self.conn.commit()
         self.bump_data_version()
+
+    # —— 内鬼库(已确认账号, 一键移入) ——
+    def add_insider(self, token, email=None, panel=None, ips=None, uas=None,
+                    asns=None, note="") -> None:
+        import json as _json
+        self.conn.execute(
+            "INSERT INTO insiders(token, email, panel, ips, uas, asns, note, added_at) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(token) DO UPDATE SET "
+            "email=excluded.email, panel=excluded.panel, ips=excluded.ips, "
+            "uas=excluded.uas, asns=excluded.asns",
+            (token, email, panel, _json.dumps(ips or [], ensure_ascii=False),
+             _json.dumps(uas or [], ensure_ascii=False),
+             _json.dumps(asns or [], ensure_ascii=False), note,
+             datetime.now().isoformat(timespec="seconds")))
+        self.conn.commit()
+        self.bump_data_version()
+
+    def remove_insider(self, token) -> None:
+        self.conn.execute("DELETE FROM insiders WHERE token=?", (token,))
+        self.conn.commit()
+        self.bump_data_version()
+
+    def list_insiders(self):
+        return self.conn.execute("SELECT * FROM insiders ORDER BY added_at DESC").fetchall()
+
+    def insider_tokens(self) -> set:
+        return {r["token"] for r in self.conn.execute("SELECT token FROM insiders").fetchall()}
 
     def ip_panel_map(self) -> dict:
         """每个拉取 IP 出现在哪些面板(src)。用于「跨面板同IP」信号。"""

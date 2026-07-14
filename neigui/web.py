@@ -77,7 +77,8 @@ NAV = [
         ("risk", "风险名单", "/risk"),
         ("rules", "风险规则", "/rules"),
         ("whitelist", "黑白名单", "/whitelist"),
-        ("featlib", "内鬼特征库", "/featlib"),
+        ("featlib", "特征库", "/featlib"),
+        ("insiders", "内鬼库", "/insiders"),
         ("domains", "入口域名", "/domains"),
     ]),
     ("运行", [
@@ -231,7 +232,7 @@ def _pager_html(path, base, size, page, pages, sizes):
 
 RISK_COLS = [("uid", "用户ID"), ("email", "邮箱"), ("panel", "机场"), ("token", "Token"),
              ("ips", "IP数"), ("online", "在线IP"), ("uas", "UA数"), ("shared", "共用账号"),
-             ("pull", "拉取"), ("score", "风险分"), ("level", "风险等级"),
+             ("sameip", "同IP"), ("pull", "拉取"), ("score", "风险分"), ("level", "风险等级"),
              ("tags", "风险标签"), ("created", "注册时间"), ("expired", "到期时间"), ("last", "最后活跃")]
 _NUM_COLS = {"uid", "ips", "online", "uas", "shared", "pull", "score"}
 _DASH = '<span class="dim">—</span>'
@@ -273,7 +274,8 @@ def _user_detail(store, tok: str) -> dict:
                                    ip_panels=store.ip_panel_map(), email_panels=store.email_panel_map(),
                                    featlib=FeatureLib(store), burst_window=_cfg.thresholds.burst_ua_window,
                                    night_start=_cfg.thresholds.night_start_hour,
-                                   night_end=_cfg.thresholds.night_end_hour),
+                                   night_end=_cfg.thresholds.night_end_hour,
+                                   insiderlib=FeatureLib.from_insiders(store)),
                     _cfg, _disabled_signals(store))
     plan = user["plan"] if user and "plan" in user.keys() else None
     has_plan = bool(plan and str(plan) not in ("", "0", "None"))
@@ -944,7 +946,8 @@ WEIGHT_CN = {
     "email_multi_panel": ("同邮箱多面板", "同一邮箱在多个面板注册, 疑似批量身份"),
     "fixed_schedule": ("固定时段拉取", "拉取时刻跨多天却高度集中在某窄时段, 呈 cron/自动化"),
     "traffic_symmetry": ("流量上下行对称", "近30天上下行接近对称(真人应下行远大于上行), 疑似中转/攻击"),
-    "feature_lib": ("命中内鬼特征库", "命中你手工登记的内鬼特征(IP/UA/ASN/邮箱), 强信号"),
+    "feature_lib": ("命中特征库", "命中你手工登记的特征(IP/UA/ASN/邮箱), 强信号"),
+    "insider_lib": ("命中内鬼库", "与内鬼库已确认账号共用 IP/UA/ASN/邮箱(同伙), 强信号"),
     "night_pull": ("深夜拉取", "北京时间凌晨2-6点仍在规律拉订阅, 非真人作息, 疑似自动化"),
     "ip_silence": ("拉取后IP静默", "拉取IP 拉完就不通/从不连节点(需节点侧日志)"),
     "scan_pattern": ("扫描式短连", "遍历所有节点每个只碰一次(需节点侧日志)"),
@@ -1101,8 +1104,8 @@ def render_featurelib(store, msg="", err="") -> str:
         trs = '<tr><td colspan="5" class="dim" style="padding:16px">还没登记特征, 用上面的表单添加</td></tr>'
     return f"""{_card_alert(msg, err)}
     <div class="card">
-      <div class="card-title">内鬼特征库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {len(rows)} 条</span></div>
-      <div class="dim small" style="margin-bottom:10px">手工登记已确认内鬼的特征, 任何用户命中即触发「命中内鬼特征库」信号(强, 权重可在风险规则页调)。抓到一个内鬼, 把它的机房IP/ASN/UA/邮箱填进来, 同伙下次露头即被逮。</div>
+      <div class="card-title">特征库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {len(rows)} 条</span></div>
+      <div class="dim small" style="margin-bottom:10px">手工登记特征(IP/UA/ASN/邮箱), 任何用户命中即触发「命中特征库」信号(强, 权重可在风险规则页调)。与「内鬼库」独立: 这里是手工规则, 内鬼库是一键移入的账号。</div>
       <form method="post" action="/featlib/add" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <select name="kind" style="padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
           <option value="ip">IP / CIDR</option>
@@ -1117,6 +1120,37 @@ def render_featurelib(store, msg="", err="") -> str:
       </form>
       <div class="tablewrap" style="margin-top:12px"><table class="grid">
         <thead><tr><th>类型</th><th>特征值</th><th>备注</th><th>添加时间</th><th>操作</th></tr></thead>
+        <tbody>{trs}</tbody>
+      </table></div>
+    </div>"""
+
+
+def render_insiders(store, msg="", err="") -> str:
+    import json as _json
+    rows = store.list_insiders()
+    trs = ""
+    for r in rows:
+        ips = _json.loads(r["ips"] or "[]")
+        uas = _json.loads(r["uas"] or "[]")
+        asns = _json.loads(r["asns"] or "[]")
+        trs += (f'<tr><td class="mono small">{esc(r["token"][:14])}</td>'
+                f'<td class="small">{esc(r["email"] or "-")}</td>'
+                f'<td class="small">{esc(r["panel"] or "-")}</td>'
+                f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
+                f'<td class="small dim">{esc(", ".join("AS" + str(a) for a in asns[:4]))}</td>'
+                f'<td class="small dim">{len(uas)} 个</td>'
+                f'<td class="small dim">{esc((r["added_at"] or "")[:16])}</td>'
+                f'<td><form method="post" action="/insiders/remove" style="margin:0">'
+                f'<input type="hidden" name="token" value="{esc(r["token"])}">'
+                f'<button class="btn sm ghost">移出</button></form></td></tr>')
+    if not trs:
+        trs = '<tr><td colspan="8" class="dim" style="padding:16px">还没有内鬼, 在风险名单里点某行「移入内鬼」</td></tr>'
+    return f"""{_card_alert(msg, err)}
+    <div class="card">
+      <div class="card-title">内鬼库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {len(rows)} 个已确认内鬼</span></div>
+      <div class="dim small" style="margin-bottom:10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>, 但它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。点「移出」可还原回风险名单。</div>
+      <div class="tablewrap"><table class="grid">
+        <thead><tr><th>Token</th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
     </div>"""
@@ -1345,19 +1379,16 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     else:
         ip_tokens = set()
 
-    def chip(label, val, color):
-        return f'<span class="chip"><b style="color:{color}">{val}</b> {label}</span>'
-
-    chips = "".join([
-        chip("高风险", counts["高"], LEVEL_COLOR["高"]), chip("中风险", counts["中"], LEVEL_COLOR["中"]),
-        chip("低风险", counts["低"], LEVEL_COLOR["低"]), chip("正常", counts["正常"], LEVEL_COLOR["正常"]),
-        chip("排除", excluded, "#8b8f98"), chip("用户", counts["total"], "#5b8def"),
-    ])
+    # 等级筛选按钮(自带数字): 全部/高/中/低/正常/排除
     pf = quote(panel_flt or "all")
+    cnt = {"all": counts["total"], "高": counts["高"], "中": counts["中"],
+           "低": counts["低"], "正常": counts["正常"], "排除": excluded}
     tabs = ""
-    for name, key in [("全部", "all"), ("高风险", "高"), ("中风险", "中"), ("低风险", "低"), ("正常", "正常")]:
+    for name, key in [("全部", "all"), ("高风险", "高"), ("中风险", "中"),
+                      ("低风险", "低"), ("正常", "正常"), ("排除", "排除")]:
         active = "active" if (flt or "all") == key else ""
-        tabs += f'<a class="tab {active}" href="/risk?level={quote(key)}&panel={pf}">{name}</a>'
+        tabs += (f'<a class="tab {active}" href="/risk?level={quote(key)}&panel={pf}">'
+                 f'{name} <b>{cnt[key]}</b></a>')
 
     # 机场/前端面板 筛选
     lf = quote(flt or "all")
@@ -1412,6 +1443,8 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
             "uas": f'<td class="num">{r.distinct_uas or _DASH}</td>',
             "shared": (f'<td class="num" style="color:#e5484d;font-weight:600">{r.ip_shared_users}</td>'
                        if r.ip_shared_users >= 2 else f'<td class="num">{r.ip_shared_users or _DASH}</td>'),
+            "sameip": (f'<td class="small"><a href="#" onclick="event.stopPropagation();sameIp(\'{esc(r.main_ip)}\');return false" '
+                       f'style="color:#5b8def">{esc(r.main_ip)}</a></td>' if r.main_ip else f'<td>{_DASH}</td>'),
             "pull": f'<td class="num">{r.pull_count}</td>',
             "score": (f'<td class="num" data-sort="{r.score}">'
                       f'<div class="scorebar"><div class="fill" style="width:{min(100, int(r.score))}%;background:{color}"></div></div>'
@@ -1422,12 +1455,16 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
             "expired": f'<td class="small" style="{"color:#e5484d" if expired else "color:#8a8a8a"}">{exp}</td>',
             "last": f'<td class="small dim">{_humanize(r.last_pull)}</td>',
         }
+        action = (f'<td><form method="post" action="/insiders/add" style="margin:0" '
+                  f'onclick="event.stopPropagation()" onsubmit="return confirm(\'移入内鬼库? 该账号将从名单移除, 但其特征继续参与检测\')">'
+                  f'<input type="hidden" name="token" value="{esc(r.token)}">'
+                  f'<button class="btn sm danger" type="submit">移入内鬼</button></form></td>')
         rows += (f'<tr title="{esc(detail)}" style="cursor:pointer" onclick="userDetail(\'{esc(r.token)}\')">'
-                 + "".join(cell[k] for k, _ in vis) + "</tr>")
+                 + "".join(cell[k] for k, _ in vis) + action + "</tr>")
     if not rows:
-        rows = f'<tr><td colspan="{len(vis)}" class="dim" style="padding:20px">暂无用户</td></tr>'
+        rows = f'<tr><td colspan="{len(vis) + 1}" class="dim" style="padding:20px">暂无用户</td></tr>'
 
-    header = "".join(f"<th{_th_attr(k)}>{lb}</th>" for k, lb in vis)
+    header = "".join(f"<th{_th_attr(k)}>{lb}</th>" for k, lb in vis) + "<th>操作</th>"
 
     # 列显隐弹窗
     col_checks = "".join(
@@ -1458,14 +1495,10 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
 
     return f"""
     <div class="card">
-      <div class="card-title" style="flex-wrap:wrap;gap:8px">
-        <span class="chips" style="margin:0">{chips}</span>
+      <div class="card-title" style="flex-wrap:wrap;gap:8px;font-weight:400">
+        <button class="btn sm" type="button" onclick="openM('colModal')">编辑标签</button>
+        <button class="btn sm ghost" type="button" onclick="openM('exportModal')">⬇ 导出CSV</button>
         {searchbox}</div>
-      <div style="display:flex;gap:8px;margin-bottom:10px;justify-content:flex-end">
-        <button class="btn sm" type="button" onclick="openM('colModal')">标签</button>
-        <a class="btn sm ghost" href="/risk/export?level={lf}&panel={pf}&q={quote(search)}"
-           title="导出当前筛选结果为 CSV(最多2万行)">⬇ 导出CSV</a>
-      </div>
       <div class="tabs">{tabs}</div>
       {panel_bar}
       <div class="tablewrap">
@@ -1474,8 +1507,26 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         <tbody>{rows}</tbody>
       </table></div>
       {pager}
-      <div class="dim small" style="margin-top:8px">点用户行看详情(账号/流量/订单/拉取记录); 红色到期=已到期; 「显示列 ▾」可选列。</div>
+      <div class="dim small" style="margin-top:8px">点用户行看详情; 「同IP」点开列出同 IP 账号; 「移入内鬼」把确认内鬼移进内鬼库(从名单移除, 特征继续检测)。</div>
     </div>{col_modal}
+    <div class="modal-bg" id="exportModal"><div class="modal">
+      <h3>导出CSV</h3><div class="dim small">选要导出的风险等级(可多选), 按当前面板/搜索筛选导出</div>
+      <form method="get" action="/risk/export">
+        <input type="hidden" name="panel" value="{esc(panel_flt or 'all')}">
+        <input type="hidden" name="q" value="{esc(search)}">
+        <div class="collist" style="margin:12px 0">
+          <label><input type="checkbox" name="lv" value="高" checked> 高风险</label>
+          <label><input type="checkbox" name="lv" value="中" checked> 中风险</label>
+          <label><input type="checkbox" name="lv" value="低"> 低风险</label>
+        </div>
+        <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('exportModal')">取消</button><button class="btn">导出</button></div>
+      </form>
+    </div></div>
+    <div class="modal-bg" id="sameIpModal"><div class="modal" style="width:min(520px,94vw)">
+      <div style="display:flex;align-items:center"><h3 style="margin:0" id="sameIpTitle">同 IP 账号</h3>
+        <button class="btn sm ghost" type="button" style="margin-left:auto" onclick="closeM('sameIpModal')">关闭</button></div>
+      <div id="sameIpBody" class="udetail"><div class="dim">加载中…</div></div>
+    </div></div>
     <div class="modal-bg" id="userModal"><div class="modal" style="width:min(560px,94vw)">
       <div style="display:flex;align-items:center"><h3 style="margin:0">用户详情</h3>
         <button class="btn sm ghost" type="button" style="margin-left:auto" onclick="closeM('userModal')">关闭</button></div>
@@ -1860,6 +1911,19 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     openM('editV2b');
   }}
   function esc0(s){{return (s==null?'':(''+s)).replace(/[&<>]/g,function(c){{return {{'&':'&amp;','<':'&lt;','>':'&gt;'}}[c];}});}}
+  function sameIp(ip){{
+    openM('sameIpModal');
+    document.getElementById('sameIpTitle').textContent='同 IP 账号 · '+ip;
+    document.getElementById('sameIpBody').innerHTML='<div class="dim">加载中…</div>';
+    fetch('/api/same_ip?ip='+encodeURIComponent(ip)).then(function(r){{return r.json();}}).then(function(list){{
+      if(!list||!list.length){{document.getElementById('sameIpBody').innerHTML='<div class="dim">无</div>';return;}}
+      var h='<div class="dim small" style="margin-bottom:6px">共 '+list.length+' 个账号用过此 IP</div><table>';
+      h+='<tr><td><b>邮箱</b></td><td><b>面板</b></td><td><b>Token</b></td></tr>';
+      list.forEach(function(a){{h+='<tr><td>'+esc0(a.email||'-')+'</td><td>'+esc0(a.panel||'-')+'</td><td style="font-family:monospace;font-size:12px">'+esc0((a.token||'').slice(0,12))+'</td></tr>';}});
+      h+='</table>';
+      document.getElementById('sameIpBody').innerHTML=h;
+    }});
+  }}
   function userDetail(tok){{
     openM('userModal');
     document.getElementById('userBody').innerHTML='<div class="dim">加载中…</div>';
@@ -1931,7 +1995,8 @@ VIEWS = {
     "/risk": ("risk", "风险名单"),
     "/rules": ("rules", "风险规则"),
     "/whitelist": ("whitelist", "黑白名单"),
-    "/featlib": ("featlib", "内鬼特征库"),
+    "/featlib": ("featlib", "特征库"),
+    "/insiders": ("insiders", "内鬼库"),
     "/domains": ("domains", "入口域名"),
     "/run": ("run", "运行控制"),
     "/runlog": ("runlog", "运行日志"),
@@ -2079,18 +2144,25 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(b"no db", "text/plain")
                 return
 
+            if path == "/api/same_ip":
+                ip = q.get("ip", [""])[0]
+                self._send(json.dumps(store.accounts_by_ip(ip) if ip else [],
+                                      ensure_ascii=False).encode(), "application/json; charset=utf-8")
+                return
+
             if path == "/risk/export":
-                # 导出当前筛选(等级/面板/搜索)命中的账号为 CSV, 最多 2 万行
+                # 导出选中等级(lv 可多选)命中的账号为 CSV, 最多 2 万行
                 import csv as _csv
                 import io as _io
-                flt = q.get("level", ["all"])[0]
+                levels = [x for x in q.get("lv", []) if x in ("高", "中", "低", "正常")]
                 pf = q.get("panel", ["all"])[0]
                 sq = (q.get("q", [""])[0] or "").strip()
                 from .asn import get_asndb
                 asndb = get_asndb()
                 ipt = store.tokens_by_search(sq, asndb) if sq else set()
-                total = min(20000, store.count_scores(flt, pf, sq, ipt))
-                rows = store.list_scores(flt, pf, sq, ipt, limit=total or 1, offset=0)
+                total = min(20000, store.count_scores("all", pf, sq, ipt, levels=levels or None))
+                rows = store.list_scores("all", pf, sq, ipt, limit=total or 1, offset=0,
+                                         levels=levels or None)
                 ipmap = store.pull_ips_for_tokens([r.token for r in rows])
                 buf = _io.StringIO()
                 wr = _csv.writer(buf)
@@ -2164,6 +2236,8 @@ class Handler(BaseHTTPRequestHandler):
                                            q.get("tab", ["white"])[0])
             elif active == "featlib":
                 content = render_featurelib(store, q.get("msg", [""])[0], q.get("err", [""])[0])
+            elif active == "insiders":
+                content = render_insiders(store, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "domains":
                 content = render_domains(store, q.get("panel", [""])[0], q.get("tier", [""])[0],
                                          q.get("msg", [""])[0], q.get("err", [""])[0])
@@ -2475,6 +2549,25 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/featlib/delete":
                 store.delete_signature(int(form["id"]))
                 self._to("/featlib?msg=" + quote("已删除")); return
+            if path == "/insiders/add":
+                tok = form.get("token", "").strip()
+                if tok:
+                    u = store.user(tok)
+                    pulls = list(store.pulls_for(tok))
+                    from .asn import get_asndb
+                    asndb = get_asndb()
+                    ips = sorted({p["ip"] for p in pulls if p["ip"]})
+                    uas = sorted({p["ua"] for p in pulls if p["ua"]})
+                    asns = sorted({asndb.lookup(ip)[0] for ip in ips
+                                   if asndb and asndb.lookup(ip)[0]}) if asndb else []
+                    store.add_insider(tok, email=(u["email"] if u else None),
+                                      panel=(u["panel"] if u and "panel" in u.keys() else None),
+                                      ips=ips, uas=uas, asns=list(asns))
+                    store.delete_score(tok)   # 立即从名单移除, 不等后台重算
+                self._back(); return
+            if path == "/insiders/remove":
+                store.remove_insider(form.get("token", "").strip())
+                self._to("/insiders?msg=" + quote("已移出内鬼库")); return
             if path == "/agent/logpath":
                 src = store.get_source(int(form["id"]))
                 if src:
