@@ -1960,24 +1960,29 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
       document.getElementById('userBody').innerHTML=h;
     }}).catch(function(){{document.getElementById('userBody').innerHTML='<div class="dim">加载失败</div>';}});
   }}
+  var _trafRows=null, _trafTok=null;
   function trafficRecords(tok,page){{
     openM('trafficModal');
-    document.getElementById('trafficBody').innerHTML='<div class="dim">加载中…</div>';
-    fetch('/api/traffic?token='+encodeURIComponent(tok)+'&page='+page).then(function(r){{return r.json();}}).then(function(d){{
+    if(_trafTok===tok && _trafRows){{trafPage(page);return;}}  // 已取过: 直接本地翻页
+    document.getElementById('trafficBody').innerHTML='<div class="dim">加载中…(查询远程数据库)</div>';
+    fetch('/api/traffic?token='+encodeURIComponent(tok)).then(function(r){{return r.json();}}).then(function(d){{
       if(d.error){{document.getElementById('trafficBody').innerHTML='<div class="dim">'+esc0(d.error)+'</div>';return;}}
-      var h='<div class="dim small" style="margin-bottom:6px">近三个月每日流量 · 共 '+esc0(d.total)+' 天</div>';
-      if(!d.rows||!d.rows.length){{h+='<div class="dim">无流量记录</div>';document.getElementById('trafficBody').innerHTML=h;return;}}
-      h+='<table class="grid"><thead><tr><th>日期</th><th>上行</th><th>下行</th><th>倍率</th></tr></thead><tbody>';
-      d.rows.forEach(function(x){{h+='<tr><td>'+esc0(x.date)+'</td><td>'+esc0(x.up)+'</td><td>'+esc0(x.down)+'</td><td>'+esc0(x.rate)+'</td></tr>';}});
-      h+='</tbody></table>';
-      var pages=Math.max(1,Math.ceil(d.total/10));
-      h+='<div class="pager" style="margin-top:10px">';
-      h+=(page>1?'<a class="pg" href="#" onclick="trafficRecords(\\''+esc0(tok)+'\\','+(page-1)+');return false">‹</a>':'<span class="pg dis">‹</span>');
-      h+='<span class="pg cur">'+page+'</span> / '+pages;
-      h+=(page<pages?'<a class="pg" href="#" onclick="trafficRecords(\\''+esc0(tok)+'\\','+(page+1)+');return false">›</a>':'<span class="pg dis">›</span>');
-      h+='</div>';
-      document.getElementById('trafficBody').innerHTML=h;
+      _trafRows=d.rows||[]; _trafTok=tok; trafPage(1);
     }}).catch(function(){{document.getElementById('trafficBody').innerHTML='<div class="dim">加载失败</div>';}});
+  }}
+  function trafPage(page){{
+    var rows=_trafRows||[], total=rows.length, per=10, pages=Math.max(1,Math.ceil(total/per));
+    page=Math.min(Math.max(1,page||1),pages);
+    var h='<div class="dim small" style="margin-bottom:6px">近三个月每日流量 · 共 '+total+' 天</div>';
+    if(!total){{document.getElementById('trafficBody').innerHTML=h+'<div class="dim">无流量记录</div>';return;}}
+    h+='<table class="grid"><thead><tr><th>日期</th><th>上行</th><th>下行</th><th>倍率</th></tr></thead><tbody>';
+    rows.slice((page-1)*per,page*per).forEach(function(x){{h+='<tr><td>'+esc0(x.date)+'</td><td>'+esc0(x.up)+'</td><td>'+esc0(x.down)+'</td><td>'+esc0(x.rate)+'</td></tr>';}});
+    h+='</tbody></table><div class="pager" style="margin-top:10px">';
+    h+=(page>1?'<a class="pg" href="#" onclick="trafPage('+(page-1)+');return false">‹</a>':'<span class="pg dis">‹</span>');
+    h+='<span class="pg cur">'+page+'</span> / '+pages;
+    h+=(page<pages?'<a class="pg" href="#" onclick="trafPage('+(page+1)+');return false">›</a>':'<span class="pg dis">›</span>');
+    h+='</div>';
+    document.getElementById('trafficBody').innerHTML=h;
   }}
   function cpAgent(t){{
     var c='curl -fsSL "'+location.origin+'/agent/install.sh?token='+t+'" | bash';
@@ -2255,9 +2260,8 @@ class Handler(BaseHTTPRequestHandler):
                         try:
                             from .connectors.v2board import V2BoardConnector
                             conn = V2BoardConnector(json.loads(src["config"] or "{}"))
-                            rows, total = conn.query_traffic(user["user_id"], days=90,
-                                                             limit=10, offset=(page - 1) * 10)
-                            out = {"rows": rows, "total": total}
+                            rows = conn.query_traffic(user["user_id"], days=90)
+                            out = {"rows": rows, "total": len(rows)}
                         except Exception as e:  # noqa: BLE001
                             out = {"error": f"流量查询失败: {e}"}
                     else:

@@ -128,24 +128,20 @@ class V2BoardConnector:
 
     _ORDER_STATUS = {0: "待支付", 1: "开通中", 2: "已取消", 3: "已完成", 4: "已折抵"}
 
-    def query_traffic(self, user_id, days: int = 90, limit: int = 10, offset: int = 0):
-        """近 days 天每日上下行(v2_stat_user 按天汇总)。返回 (行列表, 总天数)。"""
+    def query_traffic(self, user_id, days: int = 90):
+        """近 days 天每日上下行(v2_stat_user 按天汇总)。一次全取回, 翻页交给前端。"""
         import time as _t
         prefix = self.cfg.get("prefix", "v2_")
         since = int(_t.time()) - days * 86400
         conn = self._connect(read_timeout=15)
-        rows, total = [], 0
+        rows = []
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT COUNT(DISTINCT record_at) c FROM {prefix}stat_user "
-                    f"WHERE user_id=%s AND record_type='d' AND record_at>=%s", (user_id, since))
-                total = (cur.fetchone() or {}).get("c", 0)
-                cur.execute(
                     f"SELECT record_at, SUM(u) u, SUM(d) d, MAX(server_rate) rate "
                     f"FROM {prefix}stat_user WHERE user_id=%s AND record_type='d' AND record_at>=%s "
-                    f"GROUP BY record_at ORDER BY record_at DESC LIMIT %s OFFSET %s",
-                    (user_id, since, limit, offset))
+                    f"GROUP BY record_at ORDER BY record_at DESC",
+                    (user_id, since))
                 for r in cur.fetchall():
                     ca = _epoch_to_iso(r.get("record_at"))
                     rows.append({"date": ca[:10] if ca else "",
@@ -153,7 +149,7 @@ class V2BoardConnector:
                                  "rate": f"{float(r.get('rate') or 1):.2f}"})
         finally:
             conn.close()
-        return rows, total
+        return rows
 
     def query_orders(self, user_id, limit: int = 20):
         """实时查该用户订单(v2_order)。金额单位分→元。"""
