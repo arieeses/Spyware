@@ -9,6 +9,8 @@ from typing import Dict, List, Optional
 
 from .enrich import Blacklist, IpClassifier, UaClassifier
 
+_BEIJING = timezone(timedelta(hours=8))
+
 
 @dataclass
 class TokenFeatures:
@@ -17,6 +19,7 @@ class TokenFeatures:
     distinct_ips: int = 0
     distinct_uas: int = 0         # 用过多少个不同 UA(共享/轮换嫌疑)
     burst_uas: int = 0            # 任一短时窗口内出现的最大不同 UA 数(秒级轮换=自动化)
+    night_pulls: int = 0          # 北京时间深夜时段(默认2-6点)的拉取次数
     online_ips: int = 0           # 近期活跃窗口内的不同 IP 数(在线IP)
     ip_shared_users: int = 0      # 该 token 的IP中, 被最多账号共用的那个的账号数
     cross_panel_ips: int = 0      # 该 token 的IP横跨的不同面板数(≥2=一机打多机场)
@@ -65,7 +68,8 @@ def build_features(token: str, pull_rows: List, user_row,
                    ip_users: dict = None, window_hours: int = 24,
                    now: datetime = None, ip_panels: dict = None,
                    email_panels: dict = None, featlib=None,
-                   burst_window: int = 120) -> TokenFeatures:
+                   burst_window: int = 120,
+                   night_start: int = 2, night_end: int = 6) -> TokenFeatures:
     f = TokenFeatures(token=token)
     f.pull_count = len(pull_rows)
 
@@ -108,6 +112,10 @@ def build_features(token: str, pull_rows: List, user_row,
                 tua.append((dt, r["ua"]))
             if dt >= win_start and ip:
                 recent_ips.add(ip)
+            d8 = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            bh = d8.astimezone(_BEIJING).hour   # 北京时间小时
+            if night_start <= bh < night_end:
+                f.night_pulls += 1
 
     n = max(f.pull_count, 1)
     f.distinct_ips = len(ips)

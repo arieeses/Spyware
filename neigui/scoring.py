@@ -145,6 +145,12 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
             f"该 token 的某个 IP 同时被 {f.ip_shared_users} 个账号使用, 疑似聚合点/攻击机",
             tag="IP共用"))
 
+    # 深夜拉取: 北京时间 2-6 点仍在规律拉订阅(真人多在睡觉, 机器不睡)
+    if on("night_pull") and f.night_pulls >= th.night_min_pulls:
+        signals.append(Signal("深夜拉取", w.night_pull,
+            f"北京时间 {th.night_start_hour}-{th.night_end_hour} 点内拉取 {f.night_pulls} 次, "
+            "非真人作息, 疑似自动化", tag="深夜拉取"))
+
     # 命中内鬼特征库(手工登记的 IP/UA/ASN/邮箱): 强信号
     if on("feature_lib") and f.feature_hit:
         signals.append(Signal("命中内鬼特征库", w.feature_lib,

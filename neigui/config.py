@@ -48,6 +48,7 @@ class Weights:
     fixed_schedule: float = 12.0     # 拉取时刻固定在一天内某窄时段(cron/自动化)
     traffic_symmetry: float = 18.0   # 近30天上下行接近对称(中转/攻击, 非真人下载型)
     feature_lib: float = 50.0        # 命中手工登记的内鬼特征库(IP/UA/ASN/邮箱)
+    night_pull: float = 12.0         # 北京时间深夜(默认2-6点)仍在拉订阅(真人多在睡觉)
     blacklist_hit: float = 60.0      # 命中黑名单(IP/UA/ASN, 强, 直接判高危)
     # —— 节点侧信号(需节点日志, 增量5接入, 暂占位) ——
     ip_silence: float = 25.0
@@ -93,6 +94,10 @@ class Thresholds:
     # 短时多UA: burst_window 秒窗口内不同 UA 数达此值即判「短时多UA」
     burst_ua_min: int = 4
     burst_ua_window: int = 120
+    # 深夜拉取: 北京时间 [night_start, night_end) 点内拉取次数达此值即判
+    night_start_hour: int = 2
+    night_end_hour: int = 6
+    night_min_pulls: int = 3
     # 在线IP: 一个 token 近期活跃 IP 数达此值即判「多IP在线」
     online_ips_min: int = 6
     # IP共用: 该 token 的某个IP被这么多不同账号共用即判「IP共用」

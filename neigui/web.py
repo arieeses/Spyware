@@ -271,7 +271,9 @@ def _user_detail(store, tok: str) -> dict:
                                    ip_users=store.ip_user_counts_for_token(tok, _since),
                                    window_hours=win_h, now=_now,
                                    ip_panels=store.ip_panel_map(), email_panels=store.email_panel_map(),
-                                   featlib=FeatureLib(store), burst_window=_cfg.thresholds.burst_ua_window),
+                                   featlib=FeatureLib(store), burst_window=_cfg.thresholds.burst_ua_window,
+                                   night_start=_cfg.thresholds.night_start_hour,
+                                   night_end=_cfg.thresholds.night_end_hour),
                     _cfg, _disabled_signals(store))
     plan = user["plan"] if user and "plan" in user.keys() else None
     has_plan = bool(plan and str(plan) not in ("", "0", "None"))
@@ -943,6 +945,7 @@ WEIGHT_CN = {
     "fixed_schedule": ("固定时段拉取", "拉取时刻跨多天却高度集中在某窄时段, 呈 cron/自动化"),
     "traffic_symmetry": ("流量上下行对称", "近30天上下行接近对称(真人应下行远大于上行), 疑似中转/攻击"),
     "feature_lib": ("命中内鬼特征库", "命中你手工登记的内鬼特征(IP/UA/ASN/邮箱), 强信号"),
+    "night_pull": ("深夜拉取", "北京时间凌晨2-6点仍在规律拉订阅, 非真人作息, 疑似自动化"),
     "ip_silence": ("拉取后IP静默", "拉取IP 拉完就不通/从不连节点(需节点侧日志)"),
     "scan_pattern": ("扫描式短连", "遍历所有节点每个只碰一次(需节点侧日志)"),
     "tls_mismatch": ("TLS指纹矛盾", "UA 与 TLS/JA3 指纹不符(需 JA3 模块)"),
@@ -955,6 +958,8 @@ THRESH_CN = {
     "self_exclude_ratio": "自有IP排除-占比阈值",
     "reg_year_from": "重点排查-注册年份下限(含)", "active_lowtraffic_max_bytes": "重点排查-流量上限(字节)",
     "burst_ua_min": "短时多UA-窗口内UA数下限", "burst_ua_window": "短时多UA-窗口秒数",
+    "night_start_hour": "深夜拉取-起点(北京时,含)", "night_end_hour": "深夜拉取-终点(北京时,不含)",
+    "night_min_pulls": "深夜拉取-次数下限",
     "cross_panel_ip_min": "跨面板同IP-面板数下限", "email_panel_min": "同邮箱多面板-面板数下限",
     "fixed_min_pulls": "固定时段-最少拉取次数", "fixed_min_days": "固定时段-最少跨天数",
     "fixed_concentration": "固定时段-时刻聚集度阈值(0~1)",
