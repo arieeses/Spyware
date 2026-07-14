@@ -71,6 +71,7 @@ NAV = [
     ("接入管理", [
         ("v2board", "前端面板", "/panels/v2board"),
         ("log", "日志接入", "/panels/log"),
+        ("logstore", "日志库", "/logstore"),
     ]),
     ("风险管理", [
         ("risk", "风险名单", "/risk"),
@@ -340,7 +341,7 @@ class SyslogListener(threading.Thread):
                         if i >= 0:
                             rec = parse_line(text[i + len(tag) + 2:].strip())
                             if rec:
-                                store.add_pulls([rec])
+                                store.add_pulls([rec], src=s["name"])
                             break
                 finally:
                     store.close()
@@ -749,6 +750,49 @@ def render_runlog(store: Store, kind: str = "", name: str = "", size: str = "10"
       {sub}
       <div class="tablewrap"><table class="grid">
         <thead><tr><th>时间</th><th>结果</th><th>类型</th><th>名称</th><th>消息</th></tr></thead>
+        <tbody>{rows}</tbody>
+      </table></div>
+      {pager}
+    </div>"""
+
+
+def render_logstore(store: Store, src: str = "", size: str = "50", page: str = "1") -> str:
+    """日志库: 展示各接口/探针上报入库的拉取日志原文, 按来源(数据源)分类。"""
+    total = store.count_pulls_by_src(src or None)
+    psize, pg, pages, all_mode = _paginate(size, page, total, 50)
+    off = 0 if all_mode else (pg - 1) * psize
+    rows = ""
+    for r in store.list_pulls(limit=(total or 1) if all_mode else psize, offset=off, src=src or None):
+        cols = r.keys()
+        st = r["status"]
+        st_html = (f'<span class="on">{st}</span>' if st and 200 <= st < 400
+                   else f'<span style="color:#e5484d">{st}</span>')
+        rows += (f'<tr><td class="small dim">{esc(str(r["ts"])[:19].replace("T", " "))}</td>'
+                 f'<td class="small">{esc(r["src"] if "src" in cols and r["src"] else "—")}</td>'
+                 f'<td class="small mono">{esc(_mask(r["token"]))}</td>'
+                 f'<td class="small">{esc(r["ip"] or "")}</td>'
+                 f'<td class="small">{st_html}</td>'
+                 f'<td class="small dim" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{esc(r["ua"] or "")}</td>'
+                 f'<td class="small dim" style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{esc(r["uri"] or "")}</td></tr>')
+    if not rows:
+        rows = '<tr><td colspan="7" class="dim" style="padding:16px">暂无日志记录</td></tr>'
+
+    # 分类: 全部 + 各来源(数据源名), 与运行日志同款标签样式
+    none_sel = not src
+    tabs = f'<a class="tab {"active" if none_sel else ""}" href="/logstore?size={quote(size)}">全部</a>'
+    for sn in store.pull_srcs():
+        tabs += (f'<a class="tab {"active" if src==sn else ""}" '
+                 f'href="/logstore?src={quote(sn)}&size={quote(size)}">{esc(sn)}</a>')
+
+    pager = _pager_html("/logstore", {"src": src} if src else {},
+                        size if str(size) in ("20", "50", "100", "200", "500") else "50",
+                        pg, pages, ["20", "50", "100", "200", "500"])
+    return f"""
+    <div class="card">
+      <div class="card-title">日志库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {total} 条拉取记录</span></div>
+      <div class="tabs">{tabs}</div>
+      <div class="tablewrap"><table class="grid">
+        <thead><tr><th>时间</th><th>来源</th><th>Token</th><th>IP</th><th>状态</th><th>UA</th><th>接口</th></tr></thead>
         <tbody>{rows}</tbody>
       </table></div>
       {pager}
@@ -1660,6 +1704,7 @@ VIEWS = {
     "/": ("dashboard", "仪表盘"),
     "/panels/v2board": ("v2board", "前端面板"),
     "/panels/log": ("log", "日志接入"),
+    "/logstore": ("logstore", "日志库"),
     "/risk": ("risk", "风险名单"),
     "/rules": ("rules", "风险规则"),
     "/whitelist": ("whitelist", "黑白名单"),
@@ -1845,6 +1890,9 @@ class Handler(BaseHTTPRequestHandler):
                                          q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "settings":
                 content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0])
+            elif active == "logstore":
+                content = render_logstore(store, q.get("src", [""])[0],
+                                          q.get("size", ["50"])[0], q.get("page", ["1"])[0])
             elif active == "runlog":
                 content = render_runlog(store, q.get("kind", [""])[0], q.get("name", [""])[0],
                                         q.get("size", ["10"])[0], q.get("page", ["1"])[0])
@@ -1875,7 +1923,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload = {}
                 raw = payload.get("logs", []) or []
                 recs = [r for r in (parse_line(ln) for ln in raw) if r]
-                n = store.add_pulls(recs)
+                n = store.add_pulls(recs, src=src["name"])
                 sent = len(raw)
                 met = payload.get("metrics", {}) or {}
                 log_ok = bool(payload.get("log_ok"))
@@ -1912,7 +1960,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(b'{"error":"invalid key"}', "application/json; charset=utf-8"); return
                 text = raw.decode("utf-8", "replace")
                 recs = [r for r in (parse_line(ln) for ln in text.splitlines()) if r]
-                n = store.add_pulls(recs)
+                n = store.add_pulls(recs, src=src["name"])
                 self._send(json.dumps({"ok": n}).encode(), "application/json; charset=utf-8")
             finally:
                 store.close()

@@ -99,6 +99,7 @@ _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN expired_at TEXT",
     "ALTER TABLE sources ADD COLUMN auto INTEGER DEFAULT 0",
     "ALTER TABLE sources ADD COLUMN interval INTEGER DEFAULT 300",
+    "ALTER TABLE pulls ADD COLUMN src TEXT",
 ]
 
 
@@ -131,18 +132,43 @@ class Store:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_pulls_uniq "
                 "ON pulls(token, ts, ip, uri)")
 
-    def add_pulls(self, recs: Iterable[PullRecord]) -> int:
+    def add_pulls(self, recs: Iterable[PullRecord], src: Optional[str] = None) -> int:
         n = 0
         cur = self.conn.cursor()
         for r in recs:
             cur.execute(
-                "INSERT OR IGNORE INTO pulls(token, ts, ip, status, request_time, ua, uri) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (r.token, r.ts.isoformat(), r.ip, r.status, r.request_time, r.ua, r.uri),
+                "INSERT OR IGNORE INTO pulls(token, ts, ip, status, request_time, ua, uri, src) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (r.token, r.ts.isoformat(), r.ip, r.status, r.request_time, r.ua, r.uri, src),
             )
             n += cur.rowcount  # 被 IGNORE 的重复行 rowcount=0
         self.conn.commit()
         return n
+
+    def list_pulls(self, limit: int = 200, offset: int = 0, src: Optional[str] = None):
+        """日志库: 按时间倒序列出拉取记录, 可按来源(数据源名)过滤。"""
+        sql = "SELECT token, ts, ip, status, request_time, ua, uri, src FROM pulls"
+        args: list = []
+        if src:
+            sql += " WHERE src=?"
+            args.append(src)
+        sql += " ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?"
+        args += [limit, offset]
+        return self.conn.execute(sql, args).fetchall()
+
+    def count_pulls_by_src(self, src: Optional[str] = None) -> int:
+        if src:
+            row = self.conn.execute("SELECT COUNT(*) FROM pulls WHERE src=?", (src,)).fetchone()
+        else:
+            row = self.conn.execute("SELECT COUNT(*) FROM pulls").fetchone()
+        return row[0] if row else 0
+
+    def pull_srcs(self):
+        """日志库里出现过的来源名(去重), 用于分类子标签。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT src FROM pulls WHERE src IS NOT NULL AND src<>'' "
+            "ORDER BY src").fetchall()
+        return [r[0] for r in rows]
 
     def upsert_user(self, token, user_id=None, email=None, plan=None, group_id=None,
                     created_at=None, traffic_bytes=0, banned=0, panel=None,

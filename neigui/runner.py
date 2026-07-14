@@ -28,7 +28,7 @@ def _expand_paths(spec: str):
     return sorted(set(os.path.abspath(f) for f in files))
 
 
-def _ingest_one(store: Store, path: str, reset: bool) -> int:
+def _ingest_one(store: Store, path: str, reset: bool, src: str = None) -> int:
     st = os.stat(path)
     start = 0
     state = None if reset else store.get_ingest_state(path)
@@ -45,16 +45,17 @@ def _ingest_one(store: Store, path: str, reset: bool) -> int:
             if rec is not None:
                 recs.append(rec)
         end = f.tell()
-    n = store.add_pulls(recs)
+    n = store.add_pulls(recs, src=src)
     store.set_ingest_state(path, end, st.st_ino)
     return n
 
 
-def ingest_logfile(store: Store, path_spec: str, reset: bool = False) -> Tuple[int, int, int]:
+def ingest_logfile(store: Store, path_spec: str, reset: bool = False,
+                   src: str = None) -> Tuple[int, int, int]:
     """增量导入日志。path_spec 支持多行/通配(按日期滚动的日志用 *sub.log 匹配)。
     返回 (新增条数, 匹配文件数, 0)。每个文件各自记录 offset。"""
     files = _expand_paths(path_spec)
-    total = sum(_ingest_one(store, f, reset) for f in files)
+    total = sum(_ingest_one(store, f, reset, src) for f in files)
     return total, len(files), 0
 
 
@@ -93,7 +94,7 @@ def _run_source(store: Store, src) -> Tuple[bool, str]:
             if cfg.get("mode") == "agent":
                 store.set_kv(f"agent_force::{cfg.get('key', '')}", "1")
                 return True, "已通知探针立即上报(约数秒内刷新查看)"
-            n, nf, _ = ingest_logfile(store, cfg["path"])
+            n, nf, _ = ingest_logfile(store, cfg["path"], src=src["name"])
             return True, f"导入 {n} 条新记录(匹配 {nf} 个文件)"
         if src["type"] == "v2board":
             n, protos, total, relay = sync_v2board(store, cfg, panel=src["name"])
