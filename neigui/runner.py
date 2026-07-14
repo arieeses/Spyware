@@ -119,7 +119,7 @@ def _run_source(store: Store, src) -> Tuple[bool, str]:
             if cfg.get("mode") == "agent":
                 store.set_kv(f"agent_force::{cfg.get('key', '')}", "1")
                 return True, "已通知探针立即上报(约数秒内刷新查看)"
-            n, nf, _ = ingest_logfile(store, cfg["path"], src=src["name"])
+            n, nf, _ = ingest_logfile(store, cfg["path"], src=(cfg.get("panel") or src["name"]))
             return True, f"导入 {n} 条新记录(匹配 {nf} 个文件)"
         if src["type"] == "v2board":
             n, protos, total, relay = sync_v2board(store, cfg, panel=src["name"])

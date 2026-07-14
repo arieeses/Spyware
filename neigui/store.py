@@ -99,6 +99,7 @@ _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN expired_at TEXT",
     "ALTER TABLE sources ADD COLUMN auto INTEGER DEFAULT 0",
     "ALTER TABLE sources ADD COLUMN interval INTEGER DEFAULT 300",
+    "ALTER TABLE sources ADD COLUMN sort_order INTEGER DEFAULT 0",
     "ALTER TABLE pulls ADD COLUMN src TEXT",
 ]
 
@@ -269,14 +270,58 @@ class Store:
 
     # —— 数据源管理 ——
     def add_source(self, type: str, name: str, config: str, enabled: int = 1) -> None:
+        row = self.conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM sources").fetchone()
+        nxt = row[0] if row else 1
         self.conn.execute(
-            "INSERT INTO sources(type, name, config, enabled, created_at) VALUES(?,?,?,?,?)",
-            (type, name, config, enabled, datetime.now().isoformat(timespec="seconds")),
+            "INSERT INTO sources(type, name, config, enabled, created_at, sort_order) VALUES(?,?,?,?,?,?)",
+            (type, name, config, enabled, datetime.now().isoformat(timespec="seconds"), nxt),
         )
         self.conn.commit()
 
-    def delete_source(self, sid: int) -> None:
+    def delete_source(self, sid: int) -> int:
+        """删除数据源, 并清理它带进来的数据(v2board→其同步用户; 日志源→其入库日志)。
+        返回清理的记录数。"""
+        s = self.get_source(sid)
+        purged = 0
+        if s is not None:
+            name = s["name"]
+            if s["type"] == "v2board":
+                cur = self.conn.execute("DELETE FROM users WHERE panel=?", (name,))
+                purged += cur.rowcount
+                # 该面板协议/节点快照
+                self.conn.execute("DELETE FROM kv WHERE key IN (?,?)",
+                                  (f"protocols::{name}", f"nodes::{name}"))
+            else:  # 日志源: 删除以其名字或其标签为 src 的拉取记录
+                import json as _json
+                srcs = {name}
+                try:
+                    cfg = _json.loads(s["config"] or "{}")
+                    if cfg.get("panel"):
+                        srcs.add(cfg["panel"])
+                except (ValueError, TypeError):
+                    pass
+                for sv in srcs:
+                    cur = self.conn.execute("DELETE FROM pulls WHERE src=?", (sv,))
+                    purged += cur.rowcount
         self.conn.execute("DELETE FROM sources WHERE id=?", (sid,))
+        self.conn.commit()
+        return purged
+
+    def move_source(self, sid: int, direction: str) -> None:
+        """在同类型(前端面板/日志接入)内上移/下移一位。"""
+        s = self.get_source(sid)
+        if s is None:
+            return
+        same = [r["id"] for r in self.list_sources() if r["type"] == s["type"]]
+        if sid not in same:
+            return
+        i = same.index(sid)
+        j = i - 1 if direction == "up" else i + 1
+        if not (0 <= j < len(same)):
+            return
+        same[i], same[j] = same[j], same[i]
+        for pos, rid in enumerate(same):
+            self.conn.execute("UPDATE sources SET sort_order=? WHERE id=?", (pos, rid))
         self.conn.commit()
 
     def toggle_source(self, sid: int) -> None:
@@ -289,7 +334,7 @@ class Store:
         self.conn.commit()
 
     def list_sources(self):
-        return self.conn.execute("SELECT * FROM sources ORDER BY id").fetchall()
+        return self.conn.execute("SELECT * FROM sources ORDER BY sort_order, id").fetchall()
 
     def get_source(self, sid: int):
         return self.conn.execute("SELECT * FROM sources WHERE id=?", (sid,)).fetchone()

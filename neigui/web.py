@@ -517,10 +517,10 @@ def render_dashboard(store: Store) -> str:
 def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") -> str:
     """kind = 'v2board' | 'logfile'"""
     verb = "同步" if kind == "v2board" else "导入"
+    kind_srcs = [s for s in store.list_sources() if s["type"] == kind]
+    n_kind = len(kind_srcs)
     rows = ""
-    for s in store.list_sources():
-        if s["type"] != kind:
-            continue
+    for pos, s in enumerate(kind_srcs):
         on = s["enabled"]
         iv = (s["interval"] if "interval" in s.keys() else 300) or 300
         scfg = json.loads(s["config"] or "{}")
@@ -554,12 +554,14 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
                 f'{("<div>" + metstr + "</div>") if metstr else ""}')
             edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
                          f'data-mode="agent" data-path="{esc(scfg.get("log_path",""))}" '
+                         f'data-panel="{esc(scfg.get("panel",""))}" '
                          f'data-sync="{smode}" data-interval="{iv}"')
             edit_fn = "editLog"
         elif kind == "logfile":
             detail_cell = _source_detail(s)
             edit_attr = (f'data-id="{s["id"]}" data-name="{esc(s["name"])}" '
                          f'data-mode="file" data-path="{esc(scfg.get("path",""))}" '
+                         f'data-panel="{esc(scfg.get("panel",""))}" '
                          f'data-sync="{smode}" data-interval="{iv}"')
             edit_fn = "editLog"
         else:  # v2board
@@ -592,10 +594,15 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
           </td>
           <td class="small">{sync_txt}</td>
           <td class="actions">
+            <form method="post" action="/sources/move" style="display:inline-flex;gap:2px">
+              <input type="hidden" name="id" value="{s['id']}">
+              <button class="btn sm ghost" name="dir" value="up" title="上移" {'disabled' if pos == 0 else ''}>↑</button>
+              <button class="btn sm ghost" name="dir" value="down" title="下移" {'disabled' if pos == n_kind - 1 else ''}>↓</button>
+            </form>
             <form method="post" action="/sources/run"><input type="hidden" name="id" value="{s['id']}"><button class="btn sm">{verb}</button></form>
             <button class="btn sm ghost" type="button" onclick="{edit_fn}(this)" {edit_attr}>编辑</button>
             <a class="btn sm ghost" href="/runlog?name={quote(s['name'])}">日志</a>
-            <form method="post" action="/sources/delete" onsubmit="return confirm('删除?')"><input type="hidden" name="id" value="{s['id']}"><button class="btn sm danger">删除</button></form>
+            <form method="post" action="/sources/delete" onsubmit="return confirm('删除该源? 会一并清除它带进来的用户/日志数据')"><input type="hidden" name="id" value="{s['id']}"><button class="btn sm danger">删除</button></form>
           </td>
         </tr>"""
     if not rows:
@@ -610,7 +617,7 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
         title, run_label, add_id = "1Panel / aaPanel 日志", "▶ 导入全部", "addLog"
         hint = ("远程面板用<b>探针接入</b>(一键安装, 自动上报日志+负载); 中央与面板同机可用本地文件。"
                 "日志路径与上报间隔都可在每行「编辑」里改。")
-        modals = _log_modals()
+        modals = _log_modals([p["name"] for p in store.list_sources() if p["type"] == "v2board"])
         extra = """
         <div class="card">
           <div class="card-title">远程面板如何接入(探针)</div>
@@ -653,7 +660,19 @@ def _sync_field(pfx: str) -> str:
     </div>"""
 
 
-def _log_modals() -> str:
+def _panel_options(panels, sel_id="") -> str:
+    opts = '<option value="">(不归属 / 用名称)</option>'
+    for p in panels:
+        opts += f'<option value="{esc(p)}">{esc(p)}</option>'
+    return f'<select name="panel" id="{sel_id}">{opts}</select>' if sel_id else \
+           f'<select name="panel">{opts}</select>'
+
+
+def _log_modals(panels=None) -> str:
+    panels = panels or []
+    add_sel = _panel_options(panels)
+    edit_sel = _panel_options(panels, "el_panel")
+    panel_hint = '<div class="dim small" style="margin-top:4px">选归属的前端面板, 日志库按它分类; 一台机多站点各建一个日志源、分别选面板即可。</div>'
     return """
     <div class="modal-bg" id="addLog"><div class="modal">
       <h3>添加日志源</h3>
@@ -665,11 +684,12 @@ def _log_modals() -> str:
         <input type="hidden" name="type" value="logfile">
         <input type="hidden" name="mode" id="logMode" value="agent">
         <div class="mfield"><input name="name" placeholder="名称, 如: 机场A" required></div>
+        <div class="mfield"><label class="dim small">归属前端面板</label>""" + add_sel + panel_hint + """</div>
         <div class="mfield" id="lf_agenttip"><div class="dim small">探针: 添加后点该行「复制安装命令」在面板服务器执行; 日志路径/间隔装好后在该行编辑。</div></div>
         <div class="mfield" id="lf_path" style="display:none">
           <label class="dim small">日志路径(可多行/通配/目录; 目录会读其下所有 .log)</label>
-          <textarea name="path" id="lf_path_i" rows="3" placeholder="/opt/1panel/www/sites/A/log&#10;/opt/1panel/www/sites/B/log/access.log | B站&#10;/www/wwwlogs/*sub.log"></textarea>
-          <div class="dim small" style="margin-top:4px">填目录=读该目录下所有 .log; 一台机多站点可用 <code>路径 | 归属标签</code> 分开归类。</div>
+          <textarea name="path" id="lf_path_i" rows="3" placeholder="/opt/1panel/www/sites/A/log&#10;/www/wwwlogs/*sub.log"></textarea>
+          <div class="dim small" style="margin-top:4px">填目录=读该目录下所有 .log。同一源的日志都归到上面选的面板。</div>
         </div>
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('addLog')">取消</button><button class="btn">添加</button></div>
       </form>
@@ -679,9 +699,10 @@ def _log_modals() -> str:
       <form method="post" action="/sources/edit">
         <input type="hidden" name="id" id="el_id">
         <div class="mfield"><label class="dim small">名称</label><input name="name" id="el_name"></div>
+        <div class="mfield"><label class="dim small">归属前端面板</label>""" + edit_sel + panel_hint + """</div>
         <div class="mfield"><label class="dim small" id="el_lbl">日志路径</label>
-          <textarea name="path" id="el_path" rows="3" placeholder="/opt/1panel/www/sites/A/log&#10;/opt/1panel/www/sites/B/log/access.log | B站"></textarea>
-          <div class="dim small" style="margin-top:4px">每行一个; 填<b>目录</b>=读其下所有 .log; 通配用 *(如 <code>2026*su.log</code>); 多站点用 <code>路径 | 归属标签</code> 分类, 标签会作为日志库来源。</div></div>
+          <textarea name="path" id="el_path" rows="3" placeholder="/opt/1panel/www/sites/A/log"></textarea>
+          <div class="dim small" style="margin-top:4px">每行一个; 填<b>目录</b>=读其下所有 .log; 通配用 *(如 <code>2026*su.log</code>)。本源日志归到上面选的面板。</div></div>
         """ + _sync_field("el") + """
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('editLog')">取消</button><button class="btn">保存</button></div>
       </form>
@@ -1695,6 +1716,7 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     document.getElementById('el_id').value=b.dataset.id;
     document.getElementById('el_name').value=b.dataset.name;
     document.getElementById('el_path').value=b.dataset.path||'';
+    var ep=document.getElementById('el_panel'); if(ep) ep.value=b.dataset.panel||'';
     document.getElementById('el_lbl').textContent=(b.dataset.mode=='agent')?'探针日志路径(下发给探针, 留空用默认)':'本地日志路径';
     document.getElementById('el_iv').value=b.dataset.interval||'300';
     setSync('el', b.dataset.sync||'manual');
@@ -2003,19 +2025,24 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     payload = {}
                 pnets = load_proxy_nets()
+                try:
+                    _scfg = json.loads(src["config"] or "{}")
+                except (ValueError, TypeError):
+                    _scfg = {}
+                src_default = _scfg.get("panel") or src["name"]  # 归属面板优先作分类
                 groups = payload.get("groups")
                 if isinstance(groups, dict) and groups:
-                    # 探针按「归属标签」分组上报: 每组各自打 src 标签(标签空则用数据源名)
+                    # 探针按「归属标签」分组上报: 每组各自打 src 标签(标签空则用面板/数据源名)
                     n = sent = 0
                     for label, lines in groups.items():
                         lines = lines or []
                         sent += len(lines)
                         recs = [r for r in (parse_line(ln, pnets) for ln in lines) if r]
-                        n += store.add_pulls(recs, src=(label or src["name"]))
+                        n += store.add_pulls(recs, src=(label or src_default))
                 else:
                     raw = payload.get("logs", []) or []
                     recs = [r for r in (parse_line(ln, pnets) for ln in raw) if r]
-                    n = store.add_pulls(recs, src=src["name"])
+                    n = store.add_pulls(recs, src=src_default)
                     sent = len(raw)
                 met = payload.get("metrics", {}) or {}
                 log_ok = bool(payload.get("log_ok"))
@@ -2052,8 +2079,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(b'{"error":"invalid key"}', "application/json; charset=utf-8"); return
                 text = raw.decode("utf-8", "replace")
                 pnets = load_proxy_nets()
+                try:
+                    _sp = json.loads(src["config"] or "{}").get("panel")
+                except (ValueError, TypeError):
+                    _sp = None
                 recs = [r for r in (parse_line(ln, pnets) for ln in text.splitlines()) if r]
-                n = store.add_pulls(recs, src=src["name"])
+                n = store.add_pulls(recs, src=(_sp or src["name"]))
                 self._send(json.dumps({"ok": n}).encode(), "application/json; charset=utf-8")
             finally:
                 store.close()
@@ -2125,6 +2156,8 @@ class Handler(BaseHTTPRequestHandler):
                         cfg = {"mode": "syslog", "tag": "ng_" + secrets.token_hex(4)}
                     else:
                         cfg = {"mode": "file", "path": form.get("path", "").strip()}
+                    if form.get("panel", "").strip():
+                        cfg["panel"] = form["panel"].strip()
                 else:
                     cfg = {"host": form.get("host", "127.0.0.1"), "port": form.get("port", "3306"),
                            "user": form.get("user", ""), "password": form.get("password", ""),
@@ -2164,6 +2197,11 @@ class Handler(BaseHTTPRequestHandler):
                             cfg["log_path"] = p
                         else:
                             cfg["path"] = p
+                        pn = form.get("panel", "").strip()
+                        if pn:
+                            cfg["panel"] = pn
+                        else:
+                            cfg.pop("panel", None)
                     # 同步方式: 手动/自动/跟随全局 + 间隔
                     smode = form.get("sync_mode", "manual")
                     if smode not in ("manual", "auto", "follow"):
@@ -2187,6 +2225,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._to("/logstore" + (f"?src={quote(sname)}" if sname else "")); return
             if path == "/sources/delete":
                 store.delete_source(int(form["id"])); self._back(); return
+            if path == "/sources/move":
+                d = form.get("dir", "up")
+                store.move_source(int(form["id"]), "down" if d == "down" else "up")
+                self._back(); return
             if path == "/sources/toggle":
                 store.toggle_source(int(form["id"])); self._back(); return
             if path == "/sources/run":
