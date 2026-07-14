@@ -1748,8 +1748,10 @@ class Handler(BaseHTTPRequestHandler):
                                              "『立即上报』指令已下发探针, 等待回传")
                         except Exception:  # noqa: BLE001
                             pass
+                # 手动「导入」时一并让探针从头重读(reset), 把已有日志补齐(中央去重, 不会重复)
                 self._send(json.dumps({"interval": interval, "log_path": lp,
-                                       "report_now": force, "commands": []}).encode(),
+                                       "report_now": force, "reset": force,
+                                       "commands": []}).encode(),
                            "application/json; charset=utf-8")
                 return
 
@@ -1871,8 +1873,10 @@ class Handler(BaseHTTPRequestHandler):
                     payload = json.loads(raw.decode("utf-8", "replace") or "{}")
                 except ValueError:
                     payload = {}
-                recs = [r for r in (parse_line(ln) for ln in payload.get("logs", [])) if r]
+                raw = payload.get("logs", []) or []
+                recs = [r for r in (parse_line(ln) for ln in raw) if r]
                 n = store.add_pulls(recs)
+                sent = len(raw)
                 met = payload.get("metrics", {}) or {}
                 log_ok = bool(payload.get("log_ok"))
                 forced = bool(payload.get("forced"))
@@ -1890,7 +1894,7 @@ class Handler(BaseHTTPRequestHandler):
                     tag = "强制上报" if forced else ("首次上报" if first else "上报")
                     try:
                         store.add_runlog(src["type"], src["name"], log_ok,
-                                         f"探针{tag}成功: 新增 {n} 条日志"
+                                         f"探针{tag}成功: 收到 {sent} 行日志, 入库 {n} 条订阅记录"
                                          + (f" · {mstr}" if mstr else "") + warn)
                     except Exception:  # noqa: BLE001
                         pass

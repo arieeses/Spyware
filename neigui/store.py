@@ -113,18 +113,34 @@ class Store:
                 self.conn.execute(stmt)
             except sqlite3.OperationalError:
                 pass  # 列已存在
+        self._dedup_pulls_index()
         self.conn.commit()
+
+    def _dedup_pulls_index(self) -> None:
+        """给 pulls 建唯一索引, 让重复读同一行日志幂等(重读整个文件不产生重复)。
+        老库若已有重复行, 先删重再建索引。"""
+        try:
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_pulls_uniq "
+                "ON pulls(token, ts, ip, uri)")
+        except sqlite3.IntegrityError:
+            self.conn.execute(
+                "DELETE FROM pulls WHERE id NOT IN "
+                "(SELECT MIN(id) FROM pulls GROUP BY token, ts, ip, uri)")
+            self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_pulls_uniq "
+                "ON pulls(token, ts, ip, uri)")
 
     def add_pulls(self, recs: Iterable[PullRecord]) -> int:
         n = 0
         cur = self.conn.cursor()
         for r in recs:
             cur.execute(
-                "INSERT INTO pulls(token, ts, ip, status, request_time, ua, uri) "
+                "INSERT OR IGNORE INTO pulls(token, ts, ip, status, request_time, ua, uri) "
                 "VALUES(?,?,?,?,?,?,?)",
                 (r.token, r.ts.isoformat(), r.ip, r.status, r.request_time, r.ua, r.uri),
             )
-            n += 1
+            n += cur.rowcount  # 被 IGNORE 的重复行 rowcount=0
         self.conn.commit()
         return n
 

@@ -173,6 +173,8 @@ def main():
             if cfg.get("log_path"):
                 log_path = cfg["log_path"]
             force = bool(cfg.get("report_now"))
+            if cfg.get("reset"):   # 中央要求从头重读(手动导入): 清空各文件 offset
+                state = {}
         now = time.time()
         if force or (now - last_report) >= report_interval:
             lines, newstate, has_file = collect(log_path, state)
