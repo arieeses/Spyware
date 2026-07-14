@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from . import __version__, auth, sysinfo
 from .config import BASE_DIR, CONFIG
 from .log_parser import load_proxy_nets, parse_line
-from .pipeline import analyze, decide
+from .pipeline import decide
 from .runner import run_all, run_source
 from .store import Store
 
@@ -442,6 +442,13 @@ class Scheduler(threading.Thread):
                 if ran:
                     store.set_kv("last_run_summary", " · ".join(ran))
                     store.set_kv("last_run_ts", datetime.now().isoformat(timespec="seconds"))
+                # 后台物化风险评分: 数据/配置变化或超 5 分钟就重算, 页面永远读现成结果
+                try:
+                    from .pipeline import recompute_scores, scores_stale
+                    if scores_stale(store):
+                        recompute_scores(store)
+                except Exception:  # noqa: BLE001
+                    pass
                 store.close()
             except Exception:  # noqa: BLE001
                 pass
@@ -492,12 +499,9 @@ def render_load_panel() -> str:
 
 
 def render_dashboard(store: Store) -> str:
-    results = analyze(store)
-    counts = {"高": 0, "中": 0, "低": 0, "正常": 0}
-    excluded = 0
-    for r in results:
-        counts[r.level] = counts.get(r.level, 0) + 1
-        excluded += 1 if r.excluded else 0
+    counts = store.score_counts()
+    excluded = counts["excluded"]
+    total_users = counts["total"]
     srcs = store.list_sources()
     n_v2b = sum(1 for s in srcs if s["type"] == "v2board")
     n_log = sum(1 for s in srcs if s["type"] == "logfile")
@@ -514,7 +518,7 @@ def render_dashboard(store: Store) -> str:
         stat("中风险", counts["中"], LEVEL_COLOR["中"], href="/risk?level=中"),
         stat("低风险", counts["低"], LEVEL_COLOR["低"], href="/risk?level=低"),
         stat("正常/排除", f'{counts["正常"]}/{excluded}', "#8b8f98", href="/risk"),
-        stat("用户总数", len(results), href="/risk"),
+        stat("用户总数", total_users, href="/risk"),
         stat("拉取记录", _pull_count(store), href="/runlog"),
         stat("v2board 面板", n_v2b, "#7c5cff", href="/panels/v2board"),
         stat("日志源", n_log, "#7c5cff", href="/panels/log"),
@@ -1272,15 +1276,8 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
                     size: str = "10", page: str = "1") -> str:
     if str(size) not in ("10", "50", "100", "150"):
         size = "10"
-    results = analyze(store)
-    counts = {"高": 0, "中": 0, "低": 0, "正常": 0}
-    excluded = 0
-    panels = set()
-    for r in results:
-        counts[r.level] = counts.get(r.level, 0) + 1
-        excluded += 1 if r.excluded else 0
-        if r.panel:
-            panels.add(r.panel)
+    counts = store.score_counts()      # 直接读物化评分, 与总用户数解耦
+    excluded = counts["excluded"]
 
     # 搜索: token / 邮箱 / IP
     search = (search or "").strip()
@@ -1292,7 +1289,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     chips = "".join([
         chip("高风险", counts["高"], LEVEL_COLOR["高"]), chip("中风险", counts["中"], LEVEL_COLOR["中"]),
         chip("低风险", counts["低"], LEVEL_COLOR["低"]), chip("正常", counts["正常"], LEVEL_COLOR["正常"]),
-        chip("排除", excluded, "#8b8f98"), chip("用户", len(results), "#5b8def"),
+        chip("排除", excluded, "#8b8f98"), chip("用户", counts["total"], "#5b8def"),
     ])
     pf = quote(panel_flt or "all")
     tabs = ""
@@ -1302,28 +1299,19 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
 
     # 机场/前端面板 筛选
     lf = quote(flt or "all")
+    panels = store.score_panels()
     ptabs = f'<a class="tab {"active" if (panel_flt or "all")=="all" else ""}" href="/risk?level={lf}&panel=all">全部面板</a>'
-    for pn in sorted(panels):
+    for pn in panels:
         active = "active" if panel_flt == pn else ""
         ptabs += f'<a class="tab {active}" href="/risk?level={lf}&panel={quote(pn)}">{esc(pn)}</a>'
     panel_bar = f'<div class="tabs">{ptabs}</div>' if panels else ""
 
-    # 过滤(等级/机场/搜索)
-    slc = search.lower()
-    filtered = []
-    for r in results:
-        if flt in ("高", "中", "低", "正常") and r.level != flt:
-            continue
-        if panel_flt and panel_flt != "all" and (r.panel or "") != panel_flt:
-            continue
-        if search and not (slc in r.token.lower() or slc in (r.email or "").lower() or r.token in ip_tokens):
-            continue
-        filtered.append(r)
-
-    # 分页(每页 10/50/100/150, 默认 10)
-    total = len(filtered)
+    # SQL 分页/筛选/搜索: 只取当前页的行, 不再全量载入内存
+    total = store.count_scores(flt, panel_flt, search, ip_tokens)
     psize, pg, pages, all_mode = _paginate(size, page, total, 10)
-    page_rows = filtered if all_mode else filtered[(pg - 1) * psize: pg * psize]
+    page_rows = store.list_scores(flt, panel_flt, search, ip_tokens,
+                                  limit=(total or 1) if all_mode else psize,
+                                  offset=0 if all_mode else (pg - 1) * psize)
 
     # 列显隐配置
     try:
@@ -2025,9 +2013,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             if path == "/api/risks":
-                results = analyze(store)
+                # 读物化评分, 默认只回风险(非正常)用户, 按分数从高到低, 最多 5000 条
+                lvl = q.get("level", ["risky"])[0]
+                try:
+                    lim = min(20000, max(1, int(q.get("limit", ["5000"])[0])))
+                except ValueError:
+                    lim = 5000
+                if lvl in ("高", "中", "低", "正常"):
+                    results = store.list_scores(level=lvl, limit=lim)
+                else:  # risky: 高+中+低
+                    results = [r for r in store.list_scores(limit=lim) if r.level != "正常"]
                 payload = [{"token": r.token, "score": r.score, "level": r.level, "excluded": r.excluded,
-                            "email": r.email, "user_id": r.user_id, "tags": r.tags,
+                            "email": r.email, "user_id": r.user_id, "panel": r.panel, "tags": r.tags,
                             "signals": [{"name": s.name, "points": s.points, "detail": s.detail} for s in r.signals]}
                            for r in results]
                 self._send(json.dumps(payload, ensure_ascii=False, indent=2).encode(),
@@ -2536,6 +2533,13 @@ def main(argv=None):
 
     seed = Store()
     n_admin = seed.admin_count()
+    # 启动时若评分表空或过期, 先算一次(避免重启后风险名单短暂空白)
+    try:
+        from .pipeline import recompute_scores, scores_stale
+        if scores_stale(seed):
+            recompute_scores(seed)
+    except Exception:  # noqa: BLE001
+        pass
     seed.close()
     Scheduler().start()
     if args.syslog_port:

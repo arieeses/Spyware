@@ -60,25 +60,53 @@ def _disabled_signals(store) -> set:
 import threading
 import time as _time
 
-_ANALYZE_CACHE = {"key": None, "val": None}
-_ANALYZE_LOCK = threading.Lock()
+_RECOMPUTE_LOCK = threading.Lock()
+
+
+def scores_fingerprint(store: Store) -> str:
+    """评分依赖的指纹: 数据版本 + 信号开关 + 权重阈值覆盖。任一变化就该重算。"""
+    return (f"{store.data_version()}|{store.get_kv('signals_off', '')}"
+            f"|{store.get_kv('risk_overrides', '')}")
+
+
+def scores_stale(store: Store, max_age: int = 300) -> bool:
+    """指纹变了, 或距上次重算超过 max_age 秒(让在线IP等时间相关信号保持新鲜)。"""
+    if store.get_kv("scores_version", "") != scores_fingerprint(store):
+        return True
+    try:
+        return (_time.time() - float(store.get_kv("scores_ts", "0") or 0)) > max_age
+    except (ValueError, TypeError):
+        return True
+
+
+def recompute_scores(store: Store, cfg: Config = None) -> int:
+    """全量评分并物化进 scores 表。后台(调度线程)调用, 不阻塞页面请求。"""
+    with _RECOMPUTE_LOCK:
+        cfg = cfg or load_config(store)
+        fp = scores_fingerprint(store)          # 先取指纹, 期间若又变化下轮再算
+        results = _analyze(store, cfg)
+        store.replace_scores([_score_row(r) for r in results])
+        store.set_kv("scores_version", fp)
+        store.set_kv("scores_ts", str(_time.time()))
+        return len(results)
+
+
+def _score_row(r: RiskResult):
+    sigs = [{"name": s.name, "points": s.points, "detail": s.detail, "tag": s.tag}
+            for s in r.signals]
+    return (r.token, r.score, r.level, 1 if r.excluded else 0,
+            ",".join(r.tags), json.dumps(sigs, ensure_ascii=False),
+            r.email, r.user_id, r.panel, r.plan,
+            r.distinct_ips, r.online_ips, r.distinct_uas, r.ip_shared_users,
+            r.pull_count, r.traffic_bytes,
+            r.created_at.isoformat() if r.created_at else None,
+            r.expired_at.isoformat() if r.expired_at else None,
+            r.last_pull.isoformat() if r.last_pull else None)
 
 
 def analyze(store: Store, cfg: Config = None) -> List[RiskResult]:
-    """带缓存: 数据未变(data_version 不变)且在 5 分钟窗口内, 直接复用上次结果。
-    翻页/筛选/搜索都走缓存, 不再对全部用户重算。改权重/阈值(risk_overrides)也会失效。"""
-    cfg = cfg or load_config(store)
-    key = (store.data_version(), store.get_kv("signals_off", ""),
-           store.get_kv("rewrite_scope", ""), store.get_kv("risk_overrides", ""),
-           int(_time.time() // 300))
-    with _ANALYZE_LOCK:
-        if _ANALYZE_CACHE["key"] == key and _ANALYZE_CACHE["val"] is not None:
-            return _ANALYZE_CACHE["val"]
-    val = _analyze(store, cfg)
-    with _ANALYZE_LOCK:
-        _ANALYZE_CACHE["key"] = key
-        _ANALYZE_CACHE["val"] = val
-    return val
+    """全量评分列表(内部/兜底用)。热路径(风险名单/仪表盘)改读 scores 表, 不再走这里。"""
+    return _analyze(store, cfg or load_config(store))
 
 
 def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:

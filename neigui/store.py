@@ -91,7 +91,67 @@ CREATE TABLE IF NOT EXISTS entities (
   config     TEXT,
   created_at TEXT
 );
+
+-- 物化的风险评分(后台按数据变化重算; 风险名单/仪表盘直接读它, SQL 分页, 与总用户数解耦)
+CREATE TABLE IF NOT EXISTS scores (
+  token           TEXT PRIMARY KEY,
+  score           REAL DEFAULT 0,
+  level           TEXT,
+  excluded        INTEGER DEFAULT 0,
+  tags            TEXT,
+  signals         TEXT,
+  email           TEXT,
+  user_id         INTEGER,
+  panel           TEXT,
+  plan            TEXT,
+  distinct_ips    INTEGER DEFAULT 0,
+  online_ips      INTEGER DEFAULT 0,
+  distinct_uas    INTEGER DEFAULT 0,
+  ip_shared_users INTEGER DEFAULT 0,
+  pull_count      INTEGER DEFAULT 0,
+  traffic_bytes   INTEGER DEFAULT 0,
+  created_at      TEXT,
+  expired_at      TEXT,
+  last_pull       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_scores_score ON scores(score DESC);
+CREATE INDEX IF NOT EXISTS idx_scores_level ON scores(level, score DESC);
+CREATE INDEX IF NOT EXISTS idx_scores_panel ON scores(panel);
 """
+
+_SCORE_COLS = ("token", "score", "level", "excluded", "tags", "signals", "email", "user_id",
+               "panel", "plan", "distinct_ips", "online_ips", "distinct_uas", "ip_shared_users",
+               "pull_count", "traffic_bytes", "created_at", "expired_at", "last_pull")
+
+
+def _row_to_result(row):
+    """scores 表行 → RiskResult(复用现有渲染代码)。"""
+    import json as _json
+    from datetime import datetime
+    from .scoring import RiskResult, Signal
+
+    def pdt(s):
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s)
+        except (ValueError, TypeError):
+            return None
+    sigs = []
+    try:
+        for s in _json.loads(row["signals"] or "[]"):
+            sigs.append(Signal(s.get("name", ""), s.get("points", 0),
+                               s.get("detail", ""), s.get("tag", "")))
+    except (ValueError, TypeError):
+        pass
+    return RiskResult(
+        row["token"], row["score"], row["level"], bool(row["excluded"]), signals=sigs,
+        email=row["email"], user_id=row["user_id"], panel=row["panel"], plan=row["plan"],
+        distinct_ips=row["distinct_ips"], distinct_uas=row["distinct_uas"],
+        online_ips=row["online_ips"], ip_shared_users=row["ip_shared_users"],
+        pull_count=row["pull_count"], traffic_bytes=row["traffic_bytes"],
+        created_at=pdt(row["created_at"]), expired_at=pdt(row["expired_at"]),
+        last_pull=pdt(row["last_pull"]))
 
 # 增量列(老库升级用, 新库 CREATE 后补齐)
 _MIGRATIONS = [
@@ -109,6 +169,10 @@ class Store:
         self.conn = sqlite3.connect(path or CONFIG.db_path, timeout=10)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA busy_timeout=8000")
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")   # 读写并发: 后台算分时页面仍可读
+        except sqlite3.OperationalError:
+            pass
         self.conn.executescript(SCHEMA)
         for stmt in _MIGRATIONS:
             try:
@@ -157,6 +221,58 @@ class Store:
     def data_version(self) -> str:
         row = self.conn.execute("SELECT value FROM kv WHERE key='data_version'").fetchone()
         return row[0] if row else "0"
+
+    # —— 物化风险评分: 写(后台重算) + 读(风险名单/仪表盘, SQL 分页) ——
+    def replace_scores(self, rows) -> None:
+        """整表替换评分(在一个事务里 DELETE + 批量 INSERT)。rows=按 _SCORE_COLS 顺序的元组列表。"""
+        ph = ",".join("?" * len(_SCORE_COLS))
+        cur = self.conn.cursor()
+        cur.execute("BEGIN")
+        cur.execute("DELETE FROM scores")
+        cur.executemany(f"INSERT INTO scores({','.join(_SCORE_COLS)}) VALUES({ph})", rows)
+        self.conn.commit()
+
+    def score_counts(self) -> dict:
+        out = {"高": 0, "中": 0, "低": 0, "正常": 0, "excluded": 0, "total": 0}
+        for r in self.conn.execute("SELECT level, COUNT(*) c FROM scores GROUP BY level").fetchall():
+            out[r["level"]] = r["c"]
+            out["total"] += r["c"]
+        row = self.conn.execute("SELECT COUNT(*) FROM scores WHERE excluded=1").fetchone()
+        out["excluded"] = row[0] if row else 0
+        return out
+
+    def score_panels(self):
+        rows = self.conn.execute(
+            "SELECT DISTINCT panel FROM scores WHERE panel IS NOT NULL AND panel<>'' "
+            "ORDER BY panel").fetchall()
+        return [r[0] for r in rows]
+
+    def _scores_where(self, level, panel, search, ip_tokens):
+        clauses, args = [], []
+        if level in ("高", "中", "低", "正常"):
+            clauses.append("level=?"); args.append(level)
+        if panel and panel != "all":
+            clauses.append("panel=?"); args.append(panel)
+        if search:
+            like = f"%{search}%"
+            sub, a2 = "(token LIKE ? OR email LIKE ?", [like, like]
+            if ip_tokens:
+                sub += " OR token IN (%s)" % ",".join("?" * len(ip_tokens))
+                a2 += list(ip_tokens)
+            sub += ")"
+            clauses.append(sub); args += a2
+        return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), args
+
+    def count_scores(self, level="all", panel="all", search="", ip_tokens=None) -> int:
+        where, args = self._scores_where(level, panel, search, ip_tokens or set())
+        return self.conn.execute(f"SELECT COUNT(*) FROM scores{where}", args).fetchone()[0]
+
+    def list_scores(self, level="all", panel="all", search="", ip_tokens=None,
+                    limit=10, offset=0):
+        where, args = self._scores_where(level, panel, search, ip_tokens or set())
+        q = f"SELECT * FROM scores{where} ORDER BY score DESC, token LIMIT ? OFFSET ?"
+        rows = self.conn.execute(q, args + [limit, offset]).fetchall()
+        return [_row_to_result(r) for r in rows]
 
     def add_pulls(self, recs: Iterable[PullRecord], src: Optional[str] = None) -> int:
         n = 0
