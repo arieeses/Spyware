@@ -1485,7 +1485,10 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     return f"""
     <div class="card">
       <div style="display:flex;flex-wrap:wrap;gap:12px 8px;align-items:flex-start;margin-bottom:12px">
-        <div class="tabs" style="margin:0;flex:1 1 300px">{tabs}</div>
+        <div style="flex:1 1 300px;min-width:0">
+          <div class="tabs" style="margin:0 0 10px">{tabs}</div>
+          {panel_bar}
+        </div>
         <div style="margin-left:auto;display:flex;flex-direction:column;gap:8px;align-items:flex-start">
           {searchbox}
           <div style="display:flex;gap:8px">
@@ -1494,7 +1497,6 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
           </div>
         </div>
       </div>
-      {panel_bar}
       <div class="tablewrap">
       <table class="grid sortable" id="risk">
         <thead><tr>{header}</tr></thead>
