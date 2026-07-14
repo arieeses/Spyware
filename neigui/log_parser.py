@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterator, Optional
 from urllib.parse import urlsplit, parse_qs
 
@@ -39,17 +39,37 @@ def _real_ip(xff: str, remote: str) -> str:
     return (remote or "").strip()
 
 
+_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+           "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+# CLF: 14/Jul/2026:08:08:44 +0800  (月份名手动映射, 不依赖系统 locale)
+_CLF_TS = re.compile(
+    r"^(\d{1,2})/([A-Za-z]{3})/(\d{4}):(\d{2}):(\d{2}):(\d{2})\s*([+-]\d{4})?")
+
+
 def _parse_ts(s: str) -> Optional[datetime]:
     s = s.strip()
-    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S",
-                "%d/%b/%Y:%H:%M:%S %z", "%d/%b/%Y:%H:%M:%S"):
+    # ISO8601(自定义管道格式用)
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
         try:
             dt = datetime.strptime(s, fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
         except ValueError:
             continue
+    # CLF/combined 的 dd/Mon/yyyy —— 手动解析, 避开 %b 的 locale 依赖
+    m = _CLF_TS.match(s)
+    if m:
+        mon = _MONTHS.get(m.group(2).lower())
+        if mon:
+            tz = timezone.utc
+            if m.group(7):
+                sign = 1 if m.group(7)[0] == "+" else -1
+                tz = timezone(sign * timedelta(
+                    hours=int(m.group(7)[1:3]), minutes=int(m.group(7)[3:5])))
+            try:
+                return datetime(int(m.group(3)), mon, int(m.group(1)),
+                                int(m.group(4)), int(m.group(5)), int(m.group(6)), tzinfo=tz)
+            except ValueError:
+                return None
     return None
 
 
