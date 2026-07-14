@@ -1334,10 +1334,10 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
 
     return f"""
     <div class="card">
-      <div class="card-title">用户风险管理
-        <button class="btn sm ghost" type="button" style="margin-left:8px" onclick="openM('colModal')">显示列 ▾</button>
+      <div class="card-title" style="flex-wrap:wrap;gap:8px">用户风险管理
+        <button class="btn sm ghost" type="button" onclick="openM('colModal')">显示列 ▾</button>
+        <span class="chips" style="margin:0">{chips}</span>
         {searchbox}</div>
-      <div class="chips">{chips}</div>
       <div class="tabs">{tabs}</div>
       {panel_bar}
       <div class="tablewrap">
