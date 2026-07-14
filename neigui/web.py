@@ -958,27 +958,30 @@ def _setting_row(label, desc, action, content, extra="") -> str:
 
 
 def _asn_db_card() -> str:
-    """ASN 库(iptoasn)状态 + 一键更新。"""
+    """ASN 库(GeoLite2-ASN / iptoasn)状态 + 一键更新。"""
     import os as _os
-    path = CONFIG.asn_db_file
-    try:
-        sz = _os.path.getsize(path)
-        mt = datetime.fromtimestamp(_os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")
+    active = None
+    for p in (CONFIG.asn_mmdb_file, CONFIG.asn_db_file):
+        if _os.path.exists(p):
+            active = p
+            break
+    if active:
+        sz = _os.path.getsize(active) / 1048576
+        mt = datetime.fromtimestamp(_os.path.getmtime(active)).strftime("%Y-%m-%d %H:%M")
         from .asn import get_asndb
         db = get_asndb()
-        cnt = db.count if db else 0
-        status = (f'<span class="on">● 已启用</span> · {cnt:,} 条网段 · '
-                  f'{sz / 1048576:.0f}MB · 更新于 {mt}')
-    except OSError:
-        status = '<span class="off">● 未安装</span> · 点右侧按钮下载后, 机房判定/ASN黑名单自动精确化'
+        src = getattr(db, "source", "?") if db else "?"
+        status = f'<span class="on">● 已启用</span> · {src} · {sz:.0f}MB · 更新于 {mt}'
+    else:
+        status = '<span class="off">● 未安装</span> · 点下方按钮下载后, 机房判定/ASN黑名单自动精确化'
     return f"""
     <form method="post" action="/whitelist/update-asn" class="stackrow"
-          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='下载中(约30-60秒)…'">
-      <div class="sr-head"><b>IP → ASN 库(iptoasn.com, 免费离线)</b>
-        <div class="dim small">判定住宅/机房的核心数据源。下载一次即离线生效, 覆盖全球 ASN, 比手工 CIDR 准得多。建议每月更新。</div></div>
+          onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='下载中(约30-90秒)…'">
+      <div class="sr-head"><b>IP → ASN 库(免费离线, 判定住宅/机房的核心)</b>
+        <div class="dim small">默认下载 P3TERX 每日同步的 MaxMind <code>GeoLite2-ASN.mmdb</code>(无需账号)。下载一次离线生效, 覆盖全球 ASN, 比手工 CIDR 准得多。建议每月更新。</div></div>
       <div style="margin-top:6px">{status}</div>
       <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
-        <input name="url" placeholder="默认 https://iptoasn.com/data/ip2asn-v4.tsv.gz (可留空)" style="flex:1;max-width:420px">
+        <input name="url" placeholder="留空=GeoLite2-ASN.mmdb; 也可填 iptoasn 的 ...ip2asn-v4.tsv.gz" style="flex:1;max-width:460px">
         <button class="btn">下载 / 更新 ASN 库</button></div>
     </form>"""
 
@@ -2263,19 +2266,24 @@ class Handler(BaseHTTPRequestHandler):
                     f.write(form.get("content", ""))
                 self._to("/whitelist?msg=" + quote("机房关键词已保存")); return
             if path == "/whitelist/update-asn":
-                url = (form.get("url", "") or "").strip() or "https://iptoasn.com/data/ip2asn-v4.tsv.gz"
+                url = ((form.get("url", "") or "").strip()
+                       or "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-ASN.mmdb")
                 try:
                     import gzip as _gz
                     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                    with urllib.request.urlopen(req, timeout=120) as r:
+                    with urllib.request.urlopen(req, timeout=180) as r:
                         raw = r.read()
-                    data = _gz.decompress(raw) if url.endswith(".gz") else raw
-                    with open(CONFIG.asn_db_file, "wb") as f:
-                        f.write(data)
+                    if url.endswith(".mmdb"):
+                        with open(CONFIG.asn_mmdb_file, "wb") as f:
+                            f.write(raw)
+                    else:
+                        data = _gz.decompress(raw) if url.endswith(".gz") else raw
+                        with open(CONFIG.asn_db_file, "wb") as f:
+                            f.write(data)
                     from .asn import get_asndb
                     db = get_asndb()
-                    n = db.count if db else 0
-                    self._to("/whitelist?msg=" + quote(f"ASN 库已更新: {n} 条网段"))
+                    src = getattr(db, "source", "?") if db else "?"
+                    self._to("/whitelist?msg=" + quote(f"ASN 库已更新({src}), 已启用"))
                 except Exception as e:  # noqa: BLE001
                     self._to("/whitelist?err=" + quote(f"下载失败: {e}"))
                 return

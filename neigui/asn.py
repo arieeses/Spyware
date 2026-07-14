@@ -28,7 +28,26 @@ def _ip_to_int(s: str) -> Optional[int]:
         return None
 
 
+class MmdbAsnDB:
+    """MaxMind GeoLite2-ASN(.mmdb)后端, 纯 Python 读取。"""
+    source = "GeoLite2-ASN"
+
+    def __init__(self, path: str):
+        from .mmdb import MMDBReader
+        self.r = MMDBReader(path)
+        self.count = self.r.node_count  # 树节点数(规模指示, 非条目数)
+
+    def lookup(self, ip: str) -> Tuple[int, str]:
+        d = self.r.get(ip)
+        if not d:
+            return (0, "")
+        return (int(d.get("autonomous_system_number", 0) or 0),
+                d.get("autonomous_system_organization", "") or "")
+
+
 class AsnDB:
+    source = "iptoasn"
+
     def __init__(self, path: str):
         self.starts: List[int] = []
         self.ends: List[int] = []
@@ -76,19 +95,21 @@ class AsnDB:
         return (0, "")
 
 
-def get_asndb() -> Optional[AsnDB]:
-    """按文件 mtime 缓存的单例; 文件不存在返回 None(降级到 CIDR 名单)。"""
-    path = CONFIG.asn_db_file
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        return None
-    with _LOCK:
-        if _CACHE["path"] == path and _CACHE["mtime"] == mtime and _CACHE["db"] is not None:
-            return _CACHE["db"]
-        db = AsnDB(path)
-        _CACHE.update(path=path, mtime=mtime, db=db)
-        return db
+def get_asndb():
+    """按文件 mtime 缓存的单例。优先用 GeoLite2-ASN.mmdb, 否则 iptoasn TSV; 都没有返回 None。"""
+    # 优先 mmdb
+    for path, kind in ((CONFIG.asn_mmdb_file, "mmdb"), (CONFIG.asn_db_file, "tsv")):
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        with _LOCK:
+            if _CACHE["path"] == path and _CACHE["mtime"] == mtime and _CACHE["db"] is not None:
+                return _CACHE["db"]
+            db = MmdbAsnDB(path) if kind == "mmdb" else AsnDB(path)
+            _CACHE.update(path=path, mtime=mtime, db=db)
+            return db
+    return None
 
 
 _HOSTING_KW_CACHE = {"mtime": None, "kw": None}

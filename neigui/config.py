@@ -86,7 +86,8 @@ class Config:
     ua_blacklist_file: str = os.path.join(DATA_DIR, "ua_blacklist.txt")
     asn_blacklist_file: str = os.path.join(DATA_DIR, "asn_blacklist.txt")
     proxy_ips_file: str = os.path.join(DATA_DIR, "proxy_ips.txt")
-    asn_db_file: str = os.path.join(DATA_DIR, "ip2asn-v4.tsv")           # iptoasn.com 数据
+    asn_mmdb_file: str = os.path.join(DATA_DIR, "GeoLite2-ASN.mmdb")      # MaxMind GeoLite2-ASN(优先)
+    asn_db_file: str = os.path.join(DATA_DIR, "ip2asn-v4.tsv")           # iptoasn.com 数据(备选)
     asn_hosting_kw_file: str = os.path.join(DATA_DIR, "asn_hosting_keywords.txt")
     db_path: str = field(default_factory=_default_db_path)
 
