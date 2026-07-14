@@ -178,7 +178,8 @@ def main():
             lines, newstate, has_file = collect(log_path, state)
             ok = http_post(f"{a.master}/api/agent/report?token={a.token}",
                            {"logs": lines, "metrics": metrics(),
-                            "log_ok": has_file, "log_path": log_path})
+                            "log_ok": has_file, "log_path": log_path,
+                            "forced": force})
             if ok:
                 state = newstate
                 last_report = now

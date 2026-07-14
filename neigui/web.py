@@ -368,9 +368,13 @@ class Scheduler(threading.Thread):
                     if not src["enabled"]:
                         continue
                     try:
-                        mode = json.loads(src["config"] or "{}").get("sync_mode", "manual")
+                        scfg = json.loads(src["config"] or "{}")
                     except (ValueError, TypeError):
-                        mode = "manual"
+                        scfg = {}
+                    # 探针是被控主动上报, 中央无需按间隔"跑"它(否则每周期都强制+刷屏)
+                    if scfg.get("mode") in ("agent", "push", "syslog"):
+                        continue
+                    mode = scfg.get("sync_mode", "manual")
                     # auto: 独立按间隔跑; follow: 仅当全局总开关开启才跑; manual: 不自动
                     if mode == "auto":
                         active = True
@@ -1738,6 +1742,12 @@ class Handler(BaseHTTPRequestHandler):
                 force = store.get_kv(f"agent_force::{key}", "") == "1"
                 if force:
                     store.set_kv(f"agent_force::{key}", "0")  # 一次性
+                    if src:  # 探针已取走指令 = 下发成功
+                        try:
+                            store.add_runlog(src["type"], src["name"], True,
+                                             "『立即上报』指令已下发探针, 等待回传")
+                        except Exception:  # noqa: BLE001
+                            pass
                 self._send(json.dumps({"interval": interval, "log_path": lp,
                                        "report_now": force, "commands": []}).encode(),
                            "application/json; charset=utf-8")
@@ -1863,9 +1873,27 @@ class Handler(BaseHTTPRequestHandler):
                     payload = {}
                 recs = [r for r in (parse_line(ln) for ln in payload.get("logs", [])) if r]
                 n = store.add_pulls(recs)
-                store.set_kv(f"agent_metrics::{key}", json.dumps(payload.get("metrics", {})))
+                met = payload.get("metrics", {}) or {}
+                log_ok = bool(payload.get("log_ok"))
+                forced = bool(payload.get("forced"))
+                first = store.get_kv(f"agent_seen::{key}", "") == ""
+                prev_logok = store.get_kv(f"agent_logok::{key}", "1") == "1"
+                store.set_kv(f"agent_metrics::{key}", json.dumps(met))
                 store.set_kv(f"agent_seen::{key}", str(time.time()))
-                store.set_kv(f"agent_logok::{key}", "1" if payload.get("log_ok") else "0")
+                store.set_kv(f"agent_logok::{key}", "1" if log_ok else "0")
+                store.set_kv(f"src_ok::{src['id']}", "1")
+                store.set_kv(f"src_seen::{src['id']}", str(time.time()))
+                # 记入运行日志: 强制上报 / 有新日志 / 首次 / 日志状态变化 才记, 避免心跳刷屏
+                if forced or n > 0 or first or (log_ok != prev_logok):
+                    mstr = f"CPU {met.get('cpu','-')}% 内存 {met.get('mem','-')}%" if met else ""
+                    warn = "" if log_ok else " · ⚠ 未读到日志文件"
+                    tag = "强制上报" if forced else ("首次上报" if first else "上报")
+                    try:
+                        store.add_runlog(src["type"], src["name"], log_ok,
+                                         f"探针{tag}成功: 新增 {n} 条日志"
+                                         + (f" · {mstr}" if mstr else "") + warn)
+                    except Exception:  # noqa: BLE001
+                        pass
                 self._send(json.dumps({"ok": n}).encode(), "application/json; charset=utf-8")
             finally:
                 store.close()
