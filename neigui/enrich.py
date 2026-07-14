@@ -164,7 +164,7 @@ class FeatureLib:
             except Exception:  # noqa: BLE001
                 _rows = []
         for k, v in _rows:
-            v = (v or "").strip()
+            v = str(v if v is not None else "").strip()   # ASN 是 int, 先转字符串
             if not v:
                 continue
             self._add(k, v)
