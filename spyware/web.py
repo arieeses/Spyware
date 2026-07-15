@@ -1308,49 +1308,87 @@ def render_insiders(store, msg="", err="") -> str:
     </div>"""
 
 
-def render_whitelist(msg="", err="", tab="white") -> str:
-    tab = "black" if tab == "black" else "white"
-    subtabs = (
-        f'<div class="subtabs">'
-        f'<a class="subtab {"active" if tab=="white" else ""}" href="/whitelist?tab=white">白名单</a>'
-        f'<a class="subtab {"active" if tab=="black" else ""}" href="/whitelist?tab=black">黑名单</a>'
-        f'</div>')
+_WL_CATS = [
+    ("self", "自有基础设施 IP", "你自己的节点 / subconverter / 监控 IP。白名单命中即排除; 同页可维护 IP 黑名单。"),
+    ("ua", "客户端 UA", "正规客户端 UA 白名单(clash / v2rayN 等); 同页可维护 UA 黑名单。"),
+    ("hosting", "机房 / ASN", "机房关键词、机房网段 CIDR、ASN 黑名单——判定并封禁机房来源(黑名单侧)。"),
+    ("proxy", "反代 / 中转过滤", "上层反代 IP: 解析日志时跳过它们、取真实客户端 IP(与自有基础设施作用不同)。"),
+]
 
-    if tab == "white":
+
+def _wl_subtabs(cat, cur):
+    return (f'<div class="subtabs">'
+            f'<a class="subtab {"active" if cur=="white" else ""}" href="/whitelist?cat={cat}&tab=white">白名单</a>'
+            f'<a class="subtab {"active" if cur=="black" else ""}" href="/whitelist?cat={cat}&tab=black">黑名单</a>'
+            f'</div>')
+
+
+def render_whitelist(msg="", err="", cat="", tab="white") -> str:
+    tab = "black" if tab == "black" else "white"
+
+    # 入口页: 四个分类按钮
+    if cat not in ("self", "ua", "hosting", "proxy"):
+        cards = ""
+        for key, label, desc in _WL_CATS:
+            cards += (
+                f'<a href="/whitelist?cat={key}" style="display:block;text-decoration:none;color:inherit;'
+                f'border:1px solid #e3e7ec;border-radius:8px;padding:14px 16px;background:#fff">'
+                f'<div style="font-weight:600;margin-bottom:4px">{label} ›</div>'
+                f'<div class="dim small">{desc}</div></a>')
+        return f"""{_card_alert(msg, err)}
+    <div class="card">
+      <div class="card-title">黑白名单</div>
+      <div class="dim small" style="margin-bottom:12px">点进各类单独维护。白名单=命中即视为正常/排除(降误杀); 黑名单=命中即判高危并强制隔离下发。</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px">{cards}</div>
+    </div>"""
+
+    back = '<a class="btn sm ghost" href="/whitelist">← 返回</a>'
+    subtabs = ""
+    if cat == "self":
+        title = "自有基础设施 IP"
+        subtabs = _wl_subtabs("self", tab)
+        if tab == "black":
+            body = _setting_row("IP 黑名单", "已确认的攻击/侦察源 IP。命中即判高危, 进入隔离下发。每行一个 IP 或 CIDR。",
+                                "/blacklist/save-ip", _read_file(CONFIG.ip_blacklist_file))
+        else:
+            body = _setting_row("自有基础设施 IP", "命中即排除(自己的节点/subconverter/监控)。只填自己的 IP/CIDR, 别填整个机房 ASN。",
+                                "/whitelist/save-self", _read_file(CONFIG.self_ips_file))
+    elif cat == "ua":
+        title = "客户端 UA"
+        subtabs = _wl_subtabs("ua", tab)
+        if tab == "black":
+            body = _setting_row("UA 黑名单", "攻击脚本/爬虫特征 UA。命中即判高危。每行一个正则。",
+                                "/blacklist/save-ua", _read_file(CONFIG.ua_blacklist_file))
+        else:
+            body = _setting_row("客户端 UA 白名单", "正规客户端 UA(clash/v2rayN/Shadowrocket 等), 每行一个正则; 配合住宅 ASN 视为正常。",
+                                "/whitelist/save-ua", _read_file(CONFIG.ua_clients_file))
+    elif cat == "hosting":
+        title = "机房 / ASN(黑名单侧)"
         hosting = _read_file(CONFIG.hosting_cidrs_file)
         fetch_btn = ('<input name="url" form="fetchhosting" placeholder="CIDR 列表 URL" '
                      'style="flex:1;max-width:280px">'
                      '<button class="btn ghost" form="fetchhosting" formaction="/whitelist/fetch-hosting">'
                      '从URL拉取</button>')
         body = (
-            _asn_db_card()
-            + _setting_row("自有基础设施 IP", "命中即排除(自己的节点/subconverter/监控)。只填自己的 IP/CIDR, 别填整个机房 ASN。",
-                         "/whitelist/save-self", _read_file(CONFIG.self_ips_file))
-            + _setting_row("机房关键词(ASN 库判定用)", "ASN 库启用后, AS 组织名命中这些关键词即判为机房/IDC。可增删。",
-                           "/whitelist/save-asnkw", _read_file(CONFIG.asn_hosting_kw_file))
+            _setting_row("机房关键词(ASN 库判定用)", "ASN 库启用后, AS 组织名命中这些关键词即判为机房/IDC。可增删。",
+                         "/whitelist/save-asnkw", _read_file(CONFIG.asn_hosting_kw_file))
             + _setting_row(f"机房网段 CIDR(补充) · {_count_cidrs(hosting)} 条",
                            "ASN 库覆盖不到的机房网段可在此手工补。可从 URL 拉取覆盖。",
                            "/whitelist/save-hosting", hosting, extra=fetch_btn)
-            + _setting_row("客户端 UA 白名单", "正规客户端 UA(clash/v2rayN/Shadowrocket 等), 每行一个正则; 配合住宅 ASN 视为正常。",
-                           "/whitelist/save-ua", _read_file(CONFIG.ua_clients_file))
-            + _setting_row("反代 / 中转 IP 过滤", "上层反代的 IP。系统默认已优先取日志末段的真实客户端 IP; 若转发链里混入反代 IP, 在此登记会被自动剔除。每行一个 IP 或 CIDR。",
-                           "/whitelist/save-proxy", _read_file(CONFIG.proxy_ips_file))
-            + '<form id="fetchhosting" method="post" action="/whitelist/fetch-hosting"></form>')
-        note = "白名单: 命中即视为正常 / 排除, 降低误杀。"
-    else:
-        body = (
-            _setting_row("IP 黑名单", "已确认的攻击/侦察源 IP。命中即判高危, 进入隔离下发。每行一个 IP 或 CIDR。",
-                         "/blacklist/save-ip", _read_file(CONFIG.ip_blacklist_file))
-            + _setting_row("UA 黑名单", "攻击脚本/爬虫特征 UA。命中即判高危。每行一个正则。",
-                           "/blacklist/save-ua", _read_file(CONFIG.ua_blacklist_file))
             + _setting_row("ASN 黑名单", "封整个恶意机房网段。每行 CIDR, 或 ASxxxx(装了 ASN 库即生效, 如 AS4134)。",
-                           "/blacklist/save-asn", _read_file(CONFIG.asn_blacklist_file)))
-        note = "黑名单: 任一命中→用户直接标为高风险并强制隔离下发(见系统设置说明)。"
+                           "/blacklist/save-asn", _read_file(CONFIG.asn_blacklist_file))
+            + '<form id="fetchhosting" method="post" action="/whitelist/fetch-hosting"></form>')
+    else:  # proxy
+        title = "反代 / 中转过滤"
+        body = _setting_row("反代 / 中转 IP 过滤", "上层反代的 IP。系统默认已优先取日志末段的真实客户端 IP; 若转发链里混入反代 IP, 在此登记会被自动剔除。每行一个 IP 或 CIDR。<br>与「自有基础设施」不同: 这个影响<b>解析日志时取哪个IP</b>, 自有基础设施影响<b>评分是否排除</b>。",
+                            "/whitelist/save-proxy", _read_file(CONFIG.proxy_ips_file))
 
     return f"""{_card_alert(msg, err)}
     <div class="card">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        {back}<div class="card-title" style="margin:0">{title}</div>
+      </div>
       {subtabs}
-      <div class="dim small" style="margin:6px 2px 4px">{note}</div>
       {body}
     </div>"""
 
@@ -1893,6 +1931,9 @@ def render_settings(admin, msg="", err="", store=None) -> str:
     </div>"""
     return f"""{_card_alert(msg, err)}
     {paid_card}
+    <div class="card">
+      {_asn_db_card()}
+    </div>
     <div class="card">
       <div class="card-title">数据库 / 迁移</div>
       <table class="grid"><tbody>
@@ -2638,7 +2679,7 @@ class Handler(BaseHTTPRequestHandler):
                 content = render_rules(store, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "whitelist":
                 content = render_whitelist(q.get("msg", [""])[0], q.get("err", [""])[0],
-                                           q.get("tab", ["white"])[0])
+                                           q.get("cat", [""])[0], q.get("tab", ["white"])[0])
             elif active == "featlib":
                 content = render_featurelib(store, q.get("msg", [""])[0], q.get("err", [""])[0],
                                             q.get("q", [""])[0])
@@ -3065,11 +3106,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/whitelist/save-self":
                 with open(CONFIG.self_ips_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
-                self._to("/whitelist?msg=" + quote("自有IP已保存")); return
+                self._to("/whitelist?cat=self&tab=white&msg=" + quote("自有IP已保存")); return
             if path == "/whitelist/save-hosting":
                 with open(CONFIG.hosting_cidrs_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
-                self._to("/whitelist?msg=" + quote("机房库已保存")); return
+                self._to("/whitelist?cat=hosting&msg=" + quote("机房库已保存")); return
             if path == "/domains/protocols":
                 store.set_kv("protocols", form.get("protocols", ""))
                 self._to("/domains?msg=" + quote("协议列表已更新")); return
@@ -3092,15 +3133,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/whitelist/save-ua":
                 with open(CONFIG.ua_clients_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
-                self._to("/whitelist?msg=" + quote("UA 白名单已保存")); return
+                self._to("/whitelist?cat=ua&tab=white&msg=" + quote("UA 白名单已保存")); return
             if path == "/whitelist/save-proxy":
                 with open(CONFIG.proxy_ips_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
-                self._to("/whitelist?msg=" + quote("反代 IP 过滤已保存")); return
+                self._to("/whitelist?cat=proxy&msg=" + quote("反代 IP 过滤已保存")); return
             if path == "/whitelist/save-asnkw":
                 with open(CONFIG.asn_hosting_kw_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
-                self._to("/whitelist?msg=" + quote("机房关键词已保存")); return
+                self._to("/whitelist?cat=hosting&msg=" + quote("机房关键词已保存")); return
             if path == "/whitelist/update-asn":
                 url = ((form.get("url", "") or "").strip()
                        or "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-ASN.mmdb")
@@ -3119,35 +3160,35 @@ class Handler(BaseHTTPRequestHandler):
                     from .asn import get_asndb
                     db = get_asndb()
                     src = getattr(db, "source", "?") if db else "?"
-                    self._to("/whitelist?msg=" + quote(f"ASN 库已更新({src}), 已启用"))
+                    self._to("/settings?msg=" + quote(f"ASN 库已更新({src}), 已启用"))
                 except Exception as e:  # noqa: BLE001
-                    self._to("/whitelist?err=" + quote(f"下载失败: {e}"))
+                    self._to("/settings?err=" + quote(f"下载失败: {e}"))
                 return
             if path == "/blacklist/save-ip":
                 with open(CONFIG.ip_blacklist_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
-                self._to("/whitelist?tab=black&msg=" + quote("IP 黑名单已保存")); return
+                self._to("/whitelist?cat=self&tab=black&msg=" + quote("IP 黑名单已保存")); return
             if path == "/blacklist/save-ua":
                 with open(CONFIG.ua_blacklist_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
-                self._to("/whitelist?tab=black&msg=" + quote("UA 黑名单已保存")); return
+                self._to("/whitelist?cat=ua&tab=black&msg=" + quote("UA 黑名单已保存")); return
             if path == "/blacklist/save-asn":
                 with open(CONFIG.asn_blacklist_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
-                self._to("/whitelist?tab=black&msg=" + quote("ASN 黑名单已保存")); return
+                self._to("/whitelist?cat=hosting&msg=" + quote("ASN 黑名单已保存")); return
             if path == "/whitelist/fetch-hosting":
                 url = form.get("url", "").strip()
                 if not url:
-                    self._to("/whitelist?err=" + quote("请填写 URL")); return
+                    self._to("/whitelist?cat=hosting&err=" + quote("请填写 URL")); return
                 try:
                     req = urllib.request.Request(url, headers={"User-Agent": "spyware/1.0"})
                     with urllib.request.urlopen(req, timeout=20) as resp:
                         data = resp.read().decode("utf-8", "replace")
                     with open(CONFIG.hosting_cidrs_file, "w", encoding="utf-8") as f:
                         f.write(data)
-                    self._to("/whitelist?msg=" + quote(f"已从 URL 拉取 {_count_cidrs(data)} 条"))
+                    self._to("/whitelist?cat=hosting&msg=" + quote(f"已从 URL 拉取 {_count_cidrs(data)} 条"))
                 except Exception as e:  # noqa: BLE001
-                    self._to("/whitelist?err=" + quote(f"拉取失败: {e}"))
+                    self._to("/whitelist?cat=hosting&err=" + quote(f"拉取失败: {e}"))
                 return
             if path == "/nodes/add":
                 store.add_entity(form.get("kind", "backend"), form.get("name", "").strip(),
