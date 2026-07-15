@@ -1147,7 +1147,7 @@ def render_featurelib(store, msg="", err="") -> str:
           <option value="asn">ASN 号(如 AS45090)</option>
           <option value="email">邮箱(子串)</option>
         </select>
-        <input name="value" required placeholder="特征值, 如 47.115.0.0/16 / Surfboard / AS45090 / @163.com"
+        <input name="value" required placeholder="特征值, 如 1.2.3.0/24 / Surfboard / AS4134 / @example.com"
                style="flex:1;min-width:240px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
         <input name="note" placeholder="备注(选填)" style="width:160px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
         <button class="btn">添加</button>
