@@ -165,7 +165,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--master", required=True)
     ap.add_argument("--token", required=True)
-    ap.add_argument("--log", default="/www/wwwlogs/neigui_sub.log")  # 兜底; 中央可下发覆盖
+    ap.add_argument("--log", default="/www/wwwlogs/spyware_sub.log")  # 兜底; 中央可下发覆盖
     ap.add_argument("--state", default="/opt/spyware-agent/state.json")
     a = ap.parse_args()
 

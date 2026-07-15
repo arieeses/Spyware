@@ -1,7 +1,7 @@
 """解析订阅拉取日志。支持两种格式, 自动识别:
 
-1) 本系统自定义的 `neigui` 管道格式(最精确, XFF 真实 IP + request_time):
-   log_format neigui '$time_iso8601|$http_x_forwarded_for|$remote_addr|'
+1) 本系统自定义的 `spyware` 管道格式(最精确, XFF 真实 IP + request_time):
+   log_format spyware '$time_iso8601|$http_x_forwarded_for|$remote_addr|'
                      '$status|$request_time|$http_user_agent|'
                      '$arg_token|$request_uri';
 

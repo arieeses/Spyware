@@ -1,8 +1,8 @@
 """命令行入口。
 
-  python3 -m neigui.cli ingest --log sample/sub.log
-  python3 -m neigui.cli load-users --users sample/users.json
-  python3 -m neigui.cli analyze [--level 高 中] [--all]
+  python3 -m spyware.cli ingest --log sample/sub.log
+  python3 -m spyware.cli load-users --users sample/users.json
+  python3 -m spyware.cli analyze [--level 高 中] [--all]
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def cmd_analyze(args) -> None:
 
 
 def main(argv=None) -> None:
-    p = argparse.ArgumentParser(prog="neigui", description="内鬼识别系统 · 检测核心(MVP)")
+    p = argparse.ArgumentParser(prog="spyware", description="内鬼识别系统 · 检测核心(MVP)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     p_ing = sub.add_parser("ingest", help="增量导入订阅拉取日志(cron 安全)")

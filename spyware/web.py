@@ -1,6 +1,6 @@
 """本地可视化控制后台(零依赖, 标准库 http.server)。
 
-  python3 -m neigui.web            # http://127.0.0.1:8787
+  python3 -m spyware.web            # http://127.0.0.1:8787
 
 侧边栏分类导航: 仪表盘 / 接入管理(v2board·1Panel·aaPanel) / 风险管理 / 运行。
 注意: 无鉴权, 仅绑定 127.0.0.1; 勿直接暴露公网(v2board 密码存在本地库)。
@@ -97,22 +97,22 @@ ENTITY_META = {
     "template": ("协议模板", "协议参数模板(vmess/vless/trojan/hysteria 等)"),
 }
 
-AGENT_PATH = os.path.join(BASE_DIR, "agent", "neigui-agent.py")
+AGENT_PATH = os.path.join(BASE_DIR, "agent", "spyware-agent.py")
 
 # 被控探针一键安装脚本(__MASTER__/__TOKEN__ 由主控按请求 Host 注入)
 AGENT_INSTALL = """#!/bin/bash
 set -e
 MASTER="__MASTER__"
 TOKEN="__TOKEN__"
-LOG="${LOG:-/www/wwwlogs/neigui_sub.log}"
+LOG="${LOG:-/www/wwwlogs/spyware_sub.log}"
 # 先停掉所有旧版/同名探针, 避免多个进程同时上报(旧进程会读默认路径→"未读到日志文件")
-for SVC in spyware-agent neigui-agent spywarp; do
+for SVC in spyware-agent spyware-agent spywarp; do
   systemctl disable --now "$SVC" 2>/dev/null || true
   rm -f "/etc/systemd/system/$SVC.service" 2>/dev/null || true
 done
 # 兜底: 杀掉任何游离的 agent.py 进程(手动跑起来的)
 pkill -f "spyware-agent/agent.py" 2>/dev/null || true
-pkill -f "neigui-agent" 2>/dev/null || true
+pkill -f "spyware-agent" 2>/dev/null || true
 PY="$(command -v python3 || command -v python || true)"
 if [ -z "$PY" ]; then
   echo "错误: 未找到 python3。请先安装, 如 Debian/Ubuntu: apt -y install python3 ; CentOS: yum -y install python3"
@@ -1646,7 +1646,7 @@ def render_register(err="", first=False) -> str:
 def render_forgot(err="", msg="") -> str:
     return auth_layout("找回密码", f"""{_alert(err, msg)}
     <div class="authtip">提交后, 重置链接将输出到<b>服务器控制台</b>(自托管安全方式)。
-      也可在服务器运行 <code>python3 -m neigui.web resetpw 用户名</code>。</div>
+      也可在服务器运行 <code>python3 -m spyware.web resetpw 用户名</code>。</div>
     <form method="post" action="/forgot">
       <label>用户名 / 邮箱</label><input name="username" required autofocus>
       <button class="btn wide">生成重置链接</button>
@@ -1755,7 +1755,7 @@ def render_settings(admin, msg="", err="", store=None) -> str:
         </div>
       </form>
       <div class="dim small" style="margin-top:10px">
-        也可手动迁移: 把该 .db 拷到新服务器, 或设 <code>NEIGUI_DB=/路径/neigui.db</code> / config.json 的 <code>db_path</code> 指向它。
+        也可手动迁移: 把该 .db 拷到新服务器, 或设 <code>SPYWARE_DB=/路径/spyware.db</code> / config.json 的 <code>db_path</code> 指向它。
       </div>
     </div>
     <div class="card">
@@ -1774,11 +1774,11 @@ def _upgrade_and_restart():
         subprocess.run(["git", "-C", BASE_DIR, "pull", "--ff-only"], timeout=120)
     except Exception:  # noqa: BLE001
         pass
-    os.execv(sys.executable, [sys.executable, "-m", "neigui.web", *sys.argv[1:]])
+    os.execv(sys.executable, [sys.executable, "-m", "spyware.web", *sys.argv[1:]])
 
 
 def _restart_only():
-    os.execv(sys.executable, [sys.executable, "-m", "neigui.web", *sys.argv[1:]])
+    os.execv(sys.executable, [sys.executable, "-m", "spyware.web", *sys.argv[1:]])
 
 
 def _relabel_log_sources(store, old: str, new: str) -> None:
@@ -1873,7 +1873,7 @@ def _import_wait_page() -> bytes:
             '<meta http-equiv="refresh" content="5;url=/">'
             '<body style="font-family:sans-serif;padding:48px;text-align:center;color:#333">'
             '<h3>✓ 数据库已导入, 正在重启…</h3>'
-            '<p style="color:#888">约几秒后自动返回。当前库已备份为 neigui.db.bak-时间戳。</p>'
+            '<p style="color:#888">约几秒后自动返回。当前库已备份为 spyware.db.bak-时间戳。</p>'
             '</body>').encode("utf-8")
 
 
@@ -2327,7 +2327,7 @@ class Handler(BaseHTTPRequestHandler):
                         data = f.read()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/octet-stream")
-                    self.send_header("Content-Disposition", 'attachment; filename="neigui.db"')
+                    self.send_header("Content-Disposition", 'attachment; filename="spyware.db"')
                     self.send_header("Content-Length", str(len(data)))
                     self.end_headers()
                     self.wfile.write(data)
@@ -2914,7 +2914,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not url:
                     self._to("/whitelist?err=" + quote("请填写 URL")); return
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "neigui/1.0"})
+                    req = urllib.request.Request(url, headers={"User-Agent": "spyware/1.0"})
                     with urllib.request.urlopen(req, timeout=20) as resp:
                         data = resp.read().decode("utf-8", "replace")
                     with open(CONFIG.hosting_cidrs_file, "w", encoding="utf-8") as f:
@@ -2988,7 +2988,7 @@ class Handler(BaseHTTPRequestHandler):
 def _cli_resetpw(args) -> None:
     import getpass
     if not args:
-        print("用法: python3 -m neigui.web resetpw <用户名>")
+        print("用法: python3 -m spyware.web resetpw <用户名>")
         return
     store = Store()
     a = store.get_admin_by_name(args[0])
@@ -3019,7 +3019,7 @@ def main(argv=None):
         print(f"已清除演示数据: {n} 条示例拉取记录 + 示例用户/日志源")
         return
 
-    p = argparse.ArgumentParser(prog="neigui.web", description="内鬼系统 · 可视化控制后台")
+    p = argparse.ArgumentParser(prog="spyware.web", description="内鬼系统 · 可视化控制后台")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8787)
     p.add_argument("--syslog-port", type=int, default=0, help="Nginx syslog 直发接收端口(默认0关闭; 探针接入无需它)")

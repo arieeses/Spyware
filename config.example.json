@@ -2,7 +2,7 @@
   "v2board": {
     "host": "127.0.0.1",
     "port": 3306,
-    "user": "neigui_ro",
+    "user": "spyware_ro",
     "password": "改成只读账号的密码",
     "database": "v2board",
     "prefix": "v2_"

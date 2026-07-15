@@ -44,7 +44,7 @@ After=network.target
 
 [Service]
 WorkingDirectory=$DIR
-ExecStart=$(command -v python3) -m neigui.web --host 127.0.0.1 --port $PORT
+ExecStart=$(command -v python3) -m spyware.web --host 127.0.0.1 --port $PORT
 Restart=always
 
 [Install]

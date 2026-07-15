@@ -12,8 +12,8 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 
 
 def _default_db_path() -> str:
-    """DB 路径优先级: 环境变量 NEIGUI_DB > config.json 的 db_path > 默认。便于迁移。"""
-    env = os.environ.get("NEIGUI_DB")
+    """DB 路径优先级: 环境变量 SPYWARE_DB > config.json 的 db_path > 默认。便于迁移。"""
+    env = os.environ.get("SPYWARE_DB")
     if env:
         return env
     cfg = os.path.join(BASE_DIR, "config.json")
@@ -26,7 +26,7 @@ def _default_db_path() -> str:
                 return p
         except Exception:  # noqa: BLE001
             pass
-    return os.path.join(BASE_DIR, "neigui.db")
+    return os.path.join(BASE_DIR, "spyware.db")
 
 
 @dataclass
