@@ -250,6 +250,24 @@ class Store:
             self.bump_data_version()
         return cur.rowcount
 
+    def checkpoint(self) -> None:
+        """把 WAL 合并进主库(备份前调用, 保证 .db 文件完整一致)。"""
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.OperationalError:
+            pass
+
+    def vacuum(self) -> None:
+        """回收空洞 + 整理碎片(数据不变)。VACUUM 不能在事务内, 临时关自动事务。"""
+        self.conn.commit()
+        self.checkpoint()
+        old = self.conn.isolation_level
+        try:
+            self.conn.isolation_level = None
+            self.conn.execute("VACUUM")
+        finally:
+            self.conn.isolation_level = old
+
     def bump_data_version(self) -> None:
         """数据变更计数, 供分析结果缓存判断是否需要重算。"""
         self.conn.execute(

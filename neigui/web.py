@@ -647,12 +647,17 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
           </div>
         </div>"""
 
+    rebuild = ("" if kind == "v2board" else
+               '<form method="post" action="/logs/rebuild" '
+               'onsubmit="return confirm(\'清空全部拉取日志并从头重新导入? 用于修复早期反代IP重复/面板标错的脏数据。日志仍在磁盘, 会重读。\')">'
+               '<button class="btn ghost">🔄 清空并重建</button></form>')
     return f"""{_card_alert(msg, err)}
     <div class="card">
       <div class="card-title">{title}
         <div style="margin-left:auto;display:flex;gap:8px">
           <button class="btn" type="button" onclick="openM('{add_id}')">＋ 添加</button>
           <form method="post" action="/run/all"><button class="btn ghost">{run_label}</button></form>
+          {rebuild}
           <a class="btn ghost" href="/runlog?kind={kind}">日志</a>
         </div>
       </div>
@@ -1708,7 +1713,7 @@ def _update_card() -> str:
 
 def render_settings(admin, msg="", err="", store=None) -> str:
     dbp = CONFIG.db_path
-    size = os.path.getsize(dbp) / 1024 if os.path.exists(dbp) else 0
+    size_mb = (os.path.getsize(dbp) / 1048576) if os.path.exists(dbp) else 0
     paid_only = (store.get_kv("sync_paid_only", "0") == "1") if store else False
     paid_card = f"""
     <div class="card">
@@ -1726,12 +1731,24 @@ def render_settings(admin, msg="", err="", store=None) -> str:
       <div class="card-title">数据库 / 迁移</div>
       <table class="grid"><tbody>
         <tr><td style="width:120px">数据库文件</td><td class="mono small">{esc(dbp)}</td></tr>
-        <tr><td>大小</td><td>{size:.1f} KB</td></tr>
+        <tr><td>大小</td><td>{size_mb:.1f} MB</td></tr>
       </tbody></table>
-      <div style="margin-top:12px"><a class="btn" href="/db/backup">⬇ 备份下载 (.db)</a></div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <a class="btn" href="/db/backup">⬇ 备份下载 (.db)</a>
+        <form method="post" action="/db/vacuum" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='压缩中…'">
+          <button class="btn ghost">🗜 压缩数据库</button></form>
+      </div>
+      <div class="dim small" style="margin-top:8px">压缩=VACUUM: 回收删除/更新留下的空洞、整理碎片, <b>数据不变、照常读写</b>, 只让文件变小更快。</div>
+      <form method="post" action="/db/import" enctype="multipart/form-data" style="margin-top:16px"
+            onsubmit="return confirm('用上传的库覆盖当前数据库? 会先自动备份当前库, 之后自动重启。')">
+        <div class="dim small" style="margin-bottom:6px"><b>导入数据库</b>: 上传一个备份的 .db 覆盖当前库(先自动备份当前库 → 校验 → 替换 → 重启)</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="file" name="dbfile" accept=".db" required style="max-width:320px">
+          <button class="btn danger">导入并重启</button>
+        </div>
+      </form>
       <div class="dim small" style="margin-top:10px">
-        单文件 SQLite, 迁移只需把该 .db 拷到新服务器; 或设 <code>NEIGUI_DB=/路径/neigui.db</code>
-        环境变量 / 在 config.json 配 <code>db_path</code> 指向它。
+        也可手动迁移: 把该 .db 拷到新服务器, 或设 <code>NEIGUI_DB=/路径/neigui.db</code> / config.json 的 <code>db_path</code> 指向它。
       </div>
     </div>
     <div class="card">
@@ -1751,6 +1768,75 @@ def _upgrade_and_restart():
     except Exception:  # noqa: BLE001
         pass
     os.execv(sys.executable, [sys.executable, "-m", "neigui.web", *sys.argv[1:]])
+
+
+def _restart_only():
+    os.execv(sys.executable, [sys.executable, "-m", "neigui.web", *sys.argv[1:]])
+
+
+def _extract_multipart_file(content_type: str, raw: bytes):
+    """从 multipart/form-data 里取出上传文件的原始字节(单文件)。"""
+    import re
+    m = re.search(r"boundary=(.+)", content_type or "")
+    if not m:
+        return None
+    boundary = ("--" + m.group(1).strip().strip('"')).encode()
+    for part in raw.split(boundary):
+        if b"filename=" in part and b"\r\n\r\n" in part:
+            body = part.split(b"\r\n\r\n", 1)[1]
+            if body.endswith(b"\r\n"):
+                body = body[:-2]
+            return body
+    return None
+
+
+def _import_db(store, content_type: str, raw: bytes):
+    """校验并用上传的 .db 覆盖当前库。返回 (ok, err)。"""
+    import shutil
+    import sqlite3
+    import time as _t
+    if "multipart" not in (content_type or ""):
+        return False, "请选择 .db 文件上传"
+    data = _extract_multipart_file(content_type, raw)
+    if not data or len(data) < 100:
+        return False, "未收到文件或文件为空"
+    if data[:16] != b"SQLite format 3\x00":
+        return False, "不是有效的 SQLite 数据库文件"
+    tmp = CONFIG.db_path + ".import.tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    try:
+        c = sqlite3.connect(tmp)
+        tabs = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        c.close()
+    except Exception as e:  # noqa: BLE001
+        os.path.exists(tmp) and os.remove(tmp)
+        return False, f"文件损坏无法打开: {e}"
+    if not ({"admins", "users"} <= tabs):
+        os.remove(tmp)
+        return False, "缺少关键表(admins/users), 不像本系统的数据库"
+    store.checkpoint()
+    store.close()
+    try:
+        if os.path.exists(CONFIG.db_path):
+            shutil.copy2(CONFIG.db_path, CONFIG.db_path + ".bak-" + _t.strftime("%Y%m%d%H%M%S"))
+        os.replace(tmp, CONFIG.db_path)
+        for ext in ("-wal", "-shm"):
+            p = CONFIG.db_path + ext
+            if os.path.exists(p):
+                os.remove(p)
+    except Exception as e:  # noqa: BLE001
+        return False, f"替换失败: {e}"
+    return True, None
+
+
+def _import_wait_page() -> bytes:
+    return ('<!doctype html><meta charset="utf-8">'
+            '<meta http-equiv="refresh" content="5;url=/">'
+            '<body style="font-family:sans-serif;padding:48px;text-align:center;color:#333">'
+            '<h3>✓ 数据库已导入, 正在重启…</h3>'
+            '<p style="color:#888">约几秒后自动返回。当前库已备份为 neigui.db.bak-时间戳。</p>'
+            '</body>').encode("utf-8")
 
 
 # ————————————————— 布局 —————————————————
@@ -2198,6 +2284,7 @@ class Handler(BaseHTTPRequestHandler):
             # 数据库备份下载
             if path == "/db/backup":
                 if os.path.exists(CONFIG.db_path):
+                    store.checkpoint()   # 先把 WAL 合进主库, 导出才完整
                     with open(CONFIG.db_path, "rb") as f:
                         data = f.read()
                     self.send_response(200)
@@ -2439,6 +2526,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(json.dumps({"ok": n}).encode(), "application/json; charset=utf-8")
             finally:
                 store.close()
+            return
+
+        # 数据库导入(二进制 multipart, 需在 form 解析之前拦截)
+        if path == "/db/import":
+            try:
+                admin = self._admin(store)
+                if admin is None:
+                    self._to("/login"); return
+                ok, err = _import_db(store, self.headers.get("Content-Type", ""), raw)
+            finally:
+                store.close()
+            if ok:
+                threading.Timer(0.8, _restart_only).start()
+                self._send(_import_wait_page(), "text/html; charset=utf-8")
+            else:
+                self._to("/settings?err=" + quote(err or "导入失败"))
             return
 
         formq = parse_qs(raw.decode("utf-8", "replace"))
@@ -2788,6 +2891,29 @@ class Handler(BaseHTTPRequestHandler):
                     self._to("/settings?msg=" + quote(f"已开启: 清除本地未购买用户 {removed} 个, 下次同步只拉购买过的"))
                 else:
                     self._to("/settings?msg=" + quote("已关闭: 恢复同步全部用户")); return
+                return
+            if path == "/db/vacuum":
+                import os as _os
+                before = _os.path.getsize(CONFIG.db_path) / 1048576 if _os.path.exists(CONFIG.db_path) else 0
+                try:
+                    store.vacuum()
+                    after = _os.path.getsize(CONFIG.db_path) / 1048576 if _os.path.exists(CONFIG.db_path) else 0
+                    self._to("/settings?msg=" + quote(f"压缩完成: {before:.1f}MB → {after:.1f}MB"))
+                except Exception as e:  # noqa: BLE001
+                    self._to("/settings?err=" + quote(f"压缩失败: {e}"))
+                return
+            if path == "/logs/rebuild":
+                store.clear_pulls()                 # 清掉旧的(含反代IP重复/标错面板的)
+                for s in store.list_sources():      # 所有源从头重导
+                    try:
+                        cfg = json.loads(s["config"] or "{}")
+                        if s["type"] == "logfile" and cfg.get("mode") == "agent":
+                            store.set_kv(f"agent_force::{cfg.get('key', '')}", "1")  # 探针 reset 重读
+                        else:
+                            run_source(store, s)
+                    except Exception:  # noqa: BLE001
+                        pass
+                self._to("/panels/log?msg=" + quote("已清空并触发重建: 探针源约数秒内从头重读, 本地源已重导"))
                 return
             if path == "/settings/password":
                 if not auth.verify_password(form.get("old", ""), admin["salt"], admin["pwd_hash"]):
