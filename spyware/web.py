@@ -12,6 +12,7 @@ import html
 import json
 import math
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -1124,6 +1125,31 @@ def _asn_db_card() -> str:
 _SIG_KIND_CN = {"ip": "IP / CIDR", "ua": "UA(正则/子串)", "asn": "ASN 号", "email": "邮箱(子串)"}
 
 
+def _guess_sig_kind(v: str) -> str:
+    """自动判断一行特征属于 ip / asn / email / ua。"""
+    s = (v or "").strip()
+    if "@" in s:
+        return "email"
+    if re.match(r"(?i)^as\d+$", s) or s.isdigit():
+        return "asn"
+    if re.match(r"^\d{1,3}(\.\d{1,3}){3}(/\d{1,2})?$", s):
+        return "ip"
+    if s.count(":") >= 2 and re.match(r"^[0-9a-fA-F:]+(/\d{1,3})?$", s):
+        return "ip"   # IPv6
+    return "ua"
+
+
+def _parse_sig_lines(text: str, kind: str = "auto"):
+    """多行文本 → [(kind, value, '')]。kind='auto' 逐行判断, 否则整体用指定类型; 跳过空行/# 注释。"""
+    out = []
+    for ln in (text or "").splitlines():
+        v = ln.strip()
+        if not v or v.startswith("#"):
+            continue
+        out.append((_guess_sig_kind(v) if kind == "auto" else kind, v, ""))
+    return out
+
+
 def render_featurelib(store, msg="", err="") -> str:
     rows = store.list_signatures()
     trs = ""
@@ -1152,6 +1178,36 @@ def render_featurelib(store, msg="", err="") -> str:
         <input name="note" placeholder="备注(选填)" style="width:160px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
         <button class="btn">添加</button>
       </form>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <button type="button" class="btn ghost sm" onclick="document.getElementById('fbatch').style.display='block';this.style.display='none'">批量添加</button>
+        <form method="post" action="/featlib/import" enctype="multipart/form-data"
+              style="display:flex;gap:6px;align-items:center;margin:0">
+          <input type="file" name="files" multiple
+                 style="font-size:12px;max-width:230px" title="可多选文件, 或在文件夹里全选">
+          <button class="btn ghost sm">导入文件</button>
+        </form>
+        <span class="dim small">导入/批量: 逐行自动识别 IP·CIDR / AS号 / @邮箱 / UA, 自动去重</span>
+      </div>
+      <div id="fbatch" style="display:none;margin-top:10px;padding:12px;border:1px solid #e3e7ec;border-radius:8px;background:#fafbfc">
+        <form method="post" action="/featlib/batch-add">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+            <select name="kind" style="padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
+              <option value="auto">自动识别(逐行)</option>
+              <option value="ip">全部当 IP / CIDR</option>
+              <option value="ua">全部当 UA</option>
+              <option value="asn">全部当 ASN</option>
+              <option value="email">全部当邮箱</option>
+            </select>
+            <span class="dim small">一行一个;空行和 # 开头的注释会跳过</span>
+          </div>
+          <textarea name="text" rows="8" placeholder="1.2.3.0/24&#10;AS4134&#10;@example.com&#10;Surfboard"
+                    style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d5dae1;border-radius:6px;font-family:monospace;font-size:13px"></textarea>
+          <div style="margin-top:8px;display:flex;gap:8px">
+            <button class="btn">批量添加</button>
+            <button type="button" class="btn ghost" onclick="document.getElementById('fbatch').style.display='none';document.querySelector('[onclick*=fbatch]').style.display=''">取消</button>
+          </div>
+        </form>
+      </div>
       <div class="tablewrap" style="margin-top:12px"><table class="grid">
         <thead><tr><th>类型</th><th>特征值</th><th>备注</th><th>添加时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
@@ -1159,9 +1215,36 @@ def render_featurelib(store, msg="", err="") -> str:
     </div>"""
 
 
+_COPYLIST_JS = """<script>
+function _copyList(arr, btn){
+  var txt = arr.join('\\n');
+  var done = function(){
+    var old = btn.getAttribute('data-old') || btn.textContent;
+    btn.setAttribute('data-old', old);
+    btn.textContent = '已复制 ' + arr.length + ' 条';
+    setTimeout(function(){ btn.textContent = old; }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(done, function(){ _copyFallback(txt, done); });
+  } else { _copyFallback(txt, done); }
+}
+function _copyFallback(txt, done){
+  var ta = document.createElement('textarea');
+  ta.value = txt; ta.style.position='fixed'; ta.style.left='-9999px';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); done(); } catch(e){ alert('复制失败, 请手动复制'); }
+  document.body.removeChild(ta);
+}
+</script>"""
+
+
 def render_insiders(store, msg="", err="") -> str:
     import json as _json
     rows = store.list_insiders()
+    all_emails = sorted({(r["email"] or "").strip() for r in rows if (r["email"] or "").strip()})
+    all_ips = sorted({ip for r in rows for ip in _json.loads(r["ips"] or "[]") if ip})
+    emails_js = _json.dumps(all_emails, ensure_ascii=False)
+    ips_js = _json.dumps(all_ips, ensure_ascii=False)
     trs = ""
     for r in rows:
         ips = _json.loads(r["ips"] or "[]")
@@ -1181,8 +1264,16 @@ def render_insiders(store, msg="", err="") -> str:
         trs = '<tr><td colspan="8" class="dim" style="padding:16px">还没有内鬼, 在风险名单里点某行「移入内鬼」</td></tr>'
     return f"""{_card_alert(msg, err)}
     <div class="card">
-      <div class="card-title">内鬼库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {len(rows)} 个已确认内鬼</span></div>
-      <div class="dim small" style="margin-bottom:10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>, 但它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。点「移出」可还原回风险名单。</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div class="card-title" style="margin:0">内鬼库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {len(rows)} 个已确认内鬼</span></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn sm ghost" onclick="_copyList(_INS_EMAILS,this)">复制邮箱 ({len(all_emails)})</button>
+          <button class="btn sm ghost" onclick="_copyList(_INS_IPS,this)">复制IP ({len(all_ips)})</button>
+        </div>
+      </div>
+      <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>, 但它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。点「移出」可还原回风险名单。</div>
+      <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js};</script>
+      {_COPYLIST_JS}
       <div class="tablewrap"><table class="grid">
         <thead><tr><th>Token</th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
@@ -1826,6 +1917,25 @@ def _extract_multipart_file(content_type: str, raw: bytes):
                 body = body[:-2]
             return body
     return None
+
+
+def _extract_multipart_files(content_type: str, raw: bytes):
+    """从 multipart/form-data 里取出所有上传文件的原始字节(多文件/文件夹)。返回 [bytes]。"""
+    m = re.search(r"boundary=(.+)", content_type or "")
+    if not m:
+        return []
+    boundary = ("--" + m.group(1).strip().strip('"')).encode()
+    out = []
+    for part in raw.split(boundary):
+        if b"filename=" in part and b"\r\n\r\n" in part:
+            header, body = part.split(b"\r\n\r\n", 1)
+            if b'filename=""' in header:   # 没选文件的空 part
+                continue
+            if body.endswith(b"\r\n"):
+                body = body[:-2]
+            if body:
+                out.append(body)
+    return out
 
 
 def _import_db(store, content_type: str, raw: bytes):
@@ -2582,6 +2692,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._to("/settings?err=" + quote(err or "导入失败"))
             return
 
+        # 特征库文件导入(multipart, 多文件/文件夹; 需在 form 解析前拦截)
+        if path == "/featlib/import":
+            added = nlines = 0
+            try:
+                admin = self._admin(store)
+                if admin is None:
+                    self._to("/login"); return
+                files = _extract_multipart_files(self.headers.get("Content-Type", ""), raw)
+                text = "\n".join(b.decode("utf-8", "replace") for b in files)
+                items = _parse_sig_lines(text, "auto")
+                nlines = len(items)
+                added = store.add_signatures_bulk(items) if items else 0
+            finally:
+                store.close()
+            if not nlines:
+                self._to("/featlib?err=" + quote("未读到有效内容(空文件或未选文件)"))
+            else:
+                self._to("/featlib?msg=" + quote(f"已导入 {added} 条新特征(解析 {nlines} 行, 去重跳过 {nlines - added} 条)"))
+            return
+
         formq = parse_qs(raw.decode("utf-8", "replace"))
         form = {k: v[0] for k, v in formq.items()}
         try:
@@ -2795,6 +2925,17 @@ class Handler(BaseHTTPRequestHandler):
                     self._to("/featlib?msg=" + quote("已添加特征"))
                 else:
                     self._to("/featlib?err=" + quote("类型或特征值无效"))
+                return
+            if path == "/featlib/batch-add":
+                kind = form.get("kind", "auto")
+                if kind not in ("auto", "ip", "ua", "asn", "email"):
+                    kind = "auto"
+                items = _parse_sig_lines(form.get("text", ""), kind)
+                added = store.add_signatures_bulk(items) if items else 0
+                if not items:
+                    self._to("/featlib?err=" + quote("没有可添加的内容"))
+                else:
+                    self._to("/featlib?msg=" + quote(f"批量添加 {added} 条新特征(去重跳过 {len(items) - added} 条)"))
                 return
             if path == "/featlib/delete":
                 store.delete_signature(int(form["id"]))

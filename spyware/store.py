@@ -550,6 +550,28 @@ class Store:
         self.conn.commit()
         self.bump_data_version()   # 影响评分, 触发重算
 
+    def add_signatures_bulk(self, items) -> int:
+        """items: [(kind, value, note)]。去重(已存在的 kind+value 跳过), 返回新增条数。一次提交/一次重算。"""
+        existing = {(r["kind"], r["value"]) for r in
+                    self.conn.execute("SELECT kind, value FROM signatures").fetchall()}
+        now = datetime.now().isoformat(timespec="seconds")
+        added = 0
+        for kind, value, note in items:
+            value = (value or "").strip()
+            if not value or kind not in ("ip", "ua", "asn", "email"):
+                continue
+            if (kind, value) in existing:
+                continue
+            self.conn.execute(
+                "INSERT INTO signatures(kind, value, note, created_at) VALUES(?,?,?,?)",
+                (kind, value, (note or "").strip(), now))
+            existing.add((kind, value))
+            added += 1
+        if added:
+            self.conn.commit()
+            self.bump_data_version()
+        return added
+
     def list_signatures(self):
         return self.conn.execute("SELECT * FROM signatures ORDER BY kind, id DESC").fetchall()
 
