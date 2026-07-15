@@ -1085,12 +1085,12 @@ def _count_cidrs(text: str) -> int:
     return sum(1 for ln in text.splitlines() if ln.split("#", 1)[0].strip())
 
 
-def _setting_row(label, desc, action, content, extra="") -> str:
-    """命名+提示在上, 可编辑字段在下。"""
+def _setting_row(label, desc, action, content, extra="", rows=6) -> str:
+    """命名+提示在上, 可编辑字段在下。rows 控制文本框高度。"""
     return f"""
     <form method="post" action="{action}" class="stackrow">
       <div class="sr-head"><b>{label}</b><div class="dim small">{desc}</div></div>
-      <textarea name="content" rows="6">{esc(content)}</textarea>
+      <textarea name="content" rows="{rows}" style="resize:vertical">{esc(content)}</textarea>
       <div style="margin-top:8px;display:flex;gap:8px;align-items:center">{extra}<button class="btn">保存</button></div>
     </form>"""
 
@@ -1349,19 +1349,19 @@ def render_whitelist(msg="", err="", cat="", tab="white") -> str:
         subtabs = _wl_subtabs("self", tab)
         if tab == "black":
             body = _setting_row("IP 黑名单", "已确认的攻击/侦察源 IP。命中即判高危, 进入隔离下发。每行一个 IP 或 CIDR。",
-                                "/blacklist/save-ip", _read_file(CONFIG.ip_blacklist_file))
+                                "/blacklist/save-ip", _read_file(CONFIG.ip_blacklist_file), rows=22)
         else:
             body = _setting_row("自有基础设施 IP", "命中即排除(自己的节点/subconverter/监控)。只填自己的 IP/CIDR, 别填整个机房 ASN。",
-                                "/whitelist/save-self", _read_file(CONFIG.self_ips_file))
+                                "/whitelist/save-self", _read_file(CONFIG.self_ips_file), rows=22)
     elif cat == "ua":
         title = "客户端 UA"
         subtabs = _wl_subtabs("ua", tab)
         if tab == "black":
             body = _setting_row("UA 黑名单", "攻击脚本/爬虫特征 UA。命中即判高危。每行一个正则。",
-                                "/blacklist/save-ua", _read_file(CONFIG.ua_blacklist_file))
+                                "/blacklist/save-ua", _read_file(CONFIG.ua_blacklist_file), rows=22)
         else:
             body = _setting_row("客户端 UA 白名单", "正规客户端 UA(clash/v2rayN/Shadowrocket 等), 每行一个正则; 配合住宅 ASN 视为正常。",
-                                "/whitelist/save-ua", _read_file(CONFIG.ua_clients_file))
+                                "/whitelist/save-ua", _read_file(CONFIG.ua_clients_file), rows=22)
     elif cat == "hosting":
         title = "机房 / ASN(黑名单侧)"
         hosting = _read_file(CONFIG.hosting_cidrs_file)
@@ -1371,17 +1371,17 @@ def render_whitelist(msg="", err="", cat="", tab="white") -> str:
                      '从URL拉取</button>')
         body = (
             _setting_row("机房关键词(ASN 库判定用)", "ASN 库启用后, AS 组织名命中这些关键词即判为机房/IDC。可增删。",
-                         "/whitelist/save-asnkw", _read_file(CONFIG.asn_hosting_kw_file))
+                         "/whitelist/save-asnkw", _read_file(CONFIG.asn_hosting_kw_file), rows=12)
             + _setting_row(f"机房网段 CIDR(补充) · {_count_cidrs(hosting)} 条",
                            "ASN 库覆盖不到的机房网段可在此手工补。可从 URL 拉取覆盖。",
-                           "/whitelist/save-hosting", hosting, extra=fetch_btn)
+                           "/whitelist/save-hosting", hosting, extra=fetch_btn, rows=14)
             + _setting_row("ASN 黑名单", "封整个恶意机房网段。每行 CIDR, 或 ASxxxx(装了 ASN 库即生效, 如 AS4134)。",
-                           "/blacklist/save-asn", _read_file(CONFIG.asn_blacklist_file))
+                           "/blacklist/save-asn", _read_file(CONFIG.asn_blacklist_file), rows=12)
             + '<form id="fetchhosting" method="post" action="/whitelist/fetch-hosting"></form>')
     else:  # proxy
         title = "反代 / 中转过滤"
         body = _setting_row("反代 / 中转 IP 过滤", "上层反代的 IP。系统默认已优先取日志末段的真实客户端 IP; 若转发链里混入反代 IP, 在此登记会被自动剔除。每行一个 IP 或 CIDR。<br>与「自有基础设施」不同: 这个影响<b>解析日志时取哪个IP</b>, 自有基础设施影响<b>评分是否排除</b>。",
-                            "/whitelist/save-proxy", _read_file(CONFIG.proxy_ips_file))
+                            "/whitelist/save-proxy", _read_file(CONFIG.proxy_ips_file), rows=20)
 
     return f"""{_card_alert(msg, err)}
     <div class="card">
