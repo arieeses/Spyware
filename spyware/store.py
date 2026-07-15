@@ -583,6 +583,13 @@ class Store:
         self.conn.commit()
         self.bump_data_version()
 
+    def delete_all_signatures(self) -> int:
+        n = self.conn.execute("SELECT COUNT(*) FROM signatures").fetchone()[0]
+        self.conn.execute("DELETE FROM signatures")
+        self.conn.commit()
+        self.bump_data_version()
+        return n
+
     # —— 内鬼库(已确认账号, 一键移入) ——
     def add_insider(self, token, email=None, panel=None, ips=None, uas=None,
                     asns=None, note="", tags=None) -> None:

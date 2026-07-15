@@ -1234,6 +1234,9 @@ def render_featurelib(store, msg="", err="", search="") -> str:
           <button class="btn ghost sm">导入文件</button>
         </form>
         <span class="dim small">导入/批量: 逐行自动识别 IP·CIDR / AS号 / @邮箱 / UA, 自动去重</span>
+        <form method="post" action="/featlib/delete-all" style="margin:0 0 0 auto"
+              onsubmit="return confirm('确定删除特征库全部特征? 此操作不可恢复!')">
+          <button class="btn sm danger">删除全部</button></form>
       </div>
       <div id="fbatch" style="display:none;margin-top:10px;padding:12px;border:1px solid #e3e7ec;border-radius:8px;background:#fafbfc">
         <form method="post" action="/featlib/batch-add">
@@ -1334,8 +1337,9 @@ def render_insiders(store, msg="", err="") -> str:
         asndb = get_asndb()
     except Exception:  # noqa: BLE001
         asndb = None
-    from .enrich import IpClassifier
-    ipc = IpClassifier()   # 用于导入时过滤自有/反代 IP
+    from .enrich import IpClassifier, UaClassifier
+    ipc = IpClassifier()   # 导入时过滤自有/反代 IP
+    uac = UaClassifier()   # 导入时过滤自有 UA
     feat = {}
     agg = {"ip": set(), "ua": set(), "email": set(), "asn": set(), "host": set()}
     for r in rows:
@@ -1345,6 +1349,7 @@ def render_insiders(store, msg="", err="") -> str:
         email = (r["email"] or "").strip()
         prefix = email.split("@", 1)[0] if email else ""
         ips_imp = [i for i in ips if i and not ipc.is_self_ip(i)]   # 自有/反代IP不导入
+        uas_imp = [u for u in uas if u and not uac.is_self(u)]      # 自有UA不导入
         hosts = []
         if asndb is not None:
             for ip in ips_imp:
@@ -1353,7 +1358,7 @@ def render_insiders(store, msg="", err="") -> str:
                     hosts.append(org)
         entry = {
             "ip": sorted(set(ips_imp)),
-            "ua": sorted({u for u in uas if u}),
+            "ua": sorted(set(uas_imp)),
             "email": [prefix] if prefix else [],
             "asn": ["AS" + str(a) for a in sorted(set(asns))],
             "host": sorted(set(hosts)),
@@ -3200,6 +3205,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/featlib/delete":
                 store.delete_signature(int(form["id"]))
                 self._to("/featlib?msg=" + quote("已删除")); return
+            if path == "/featlib/delete-all":
+                n = store.delete_all_signatures()
+                self._to("/featlib?msg=" + quote(f"已删除全部 {n} 条特征")); return
             if path == "/insiders/add":
                 tok = form.get("token", "").strip()
                 if tok:
@@ -3226,9 +3234,11 @@ class Handler(BaseHTTPRequestHandler):
                 host_v = [x for x in formq.get("hostname", []) if x]
                 if not (ip_v or ua_v or em_v or asn_v or host_v):
                     self._to("/insiders?err=" + quote("没有勾选任何项")); return
-                from .enrich import IpClassifier
+                from .enrich import IpClassifier, UaClassifier
                 _ipc = IpClassifier()
+                _uac = UaClassifier()
                 ip_v = [ip for ip in ip_v if not _ipc.is_self_ip(ip)]   # 自有/反代IP不导入
+                ua_v = [ua for ua in ua_v if not _uac.is_self(ua)]      # 自有UA不导入
                 items = []
                 for ip in ip_v:
                     items.append(("ip", ip, "内鬼库导入"))
