@@ -1285,6 +1285,41 @@ function _copyFallback(txt, done){
 </script>"""
 
 
+_IMPFEAT_JS = """<script>
+function _impEsc(s){return String(s).replace(/[&<>\"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c];});}
+function _impGrp(title, name, vals, warn){
+  if(!vals || !vals.length) return '';
+  var h='<div style=\"margin:10px 0 4px;font-weight:600\">'+title+(warn?' <span style=\"color:#e5484d;font-weight:400;font-size:12px\">'+warn+'</span>':'')+
+        ' <a href=\"#\" onclick=\"_impTgl(this);return false\" style=\"font-weight:400;font-size:12px;margin-left:6px\">全选/全不选</a></div>';
+  h+='<div style=\"display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:2px 12px\">';
+  vals.forEach(function(v){
+    h+='<label style=\"display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis\"><input type=\"checkbox\" name=\"'+name+'\" value=\"'+_impEsc(v)+'\"> '+_impEsc(v)+'</label>';
+  });
+  h+='</div>';
+  return h;
+}
+function impFeat(token){
+  var d = token ? _INS_FEAT[token] : _INS_FEAT_ALL;
+  if(!d) return;
+  var who = token ? ('该内鬼 '+token.slice(0,12)) : '全部内鬼';
+  var h='<div class=\"dim small\" style=\"margin-bottom:4px\">来源: '+who+' · 勾选要导入的具体项(默认都不勾), 已存在的自动去重</div>';
+  h+=_impGrp('IP','ip',d.ip,'');
+  h+=_impGrp('UA(整串精确)','ua',d.ua,'');
+  h+=_impGrp('邮箱前缀','email',d.email,'');
+  h+=_impGrp('ASN','asn',d.asn,'整机房, 慎选');
+  h+=_impGrp('机房名称 → 机房关键词库','hostname',d.host,'整机房, 慎选');
+  document.getElementById('impFeatBody').innerHTML = (h.indexOf('checkbox')>=0) ? h : '<div class=\"dim\">该内鬼无可导入的特征</div>';
+  openM('impFeatModal');
+}
+function _impTgl(a){
+  var grp=a.parentNode.nextElementSibling;
+  var boxes=grp.querySelectorAll('input[type=checkbox]');
+  var toCheck=Array.prototype.some.call(boxes,function(b){return !b.checked;});
+  Array.prototype.forEach.call(boxes,function(b){b.checked=toCheck;});
+}
+</script>"""
+
+
 def render_insiders(store, msg="", err="") -> str:
     import json as _json
     rows = store.list_insiders()
@@ -1292,6 +1327,40 @@ def render_insiders(store, msg="", err="") -> str:
     all_ips = sorted({ip for r in rows for ip in _json.loads(r["ips"] or "[]") if ip})
     emails_js = _json.dumps(all_emails, ensure_ascii=False)
     ips_js = _json.dumps(all_ips, ensure_ascii=False)
+
+    # 每个内鬼可导入的细分特征值 + 全部聚合(导入弹层逐项勾选)
+    try:
+        from .asn import get_asndb
+        asndb = get_asndb()
+    except Exception:  # noqa: BLE001
+        asndb = None
+    feat = {}
+    agg = {"ip": set(), "ua": set(), "email": set(), "asn": set(), "host": set()}
+    for r in rows:
+        ips = _json.loads(r["ips"] or "[]")
+        uas = _json.loads(r["uas"] or "[]")
+        asns = _json.loads(r["asns"] or "[]")
+        email = (r["email"] or "").strip()
+        prefix = email.split("@", 1)[0] if email else ""
+        hosts = []
+        if asndb is not None:
+            for ip in ips:
+                org = (asndb.lookup(ip)[1] or "").strip().upper()
+                if org:
+                    hosts.append(org)
+        entry = {
+            "ip": sorted({i for i in ips if i}),
+            "ua": sorted({u for u in uas if u}),
+            "email": [prefix] if prefix else [],
+            "asn": ["AS" + str(a) for a in sorted(set(asns))],
+            "host": sorted(set(hosts)),
+        }
+        feat[r["token"]] = entry
+        for k in agg:
+            agg[k].update(entry[k])
+    feat_js = _json.dumps(feat, ensure_ascii=False)
+    agg_js = _json.dumps({k: sorted(v) for k, v in agg.items()}, ensure_ascii=False)
+
     trs = ""
     for r in rows:
         ips = _json.loads(r["ips"] or "[]")
@@ -1305,7 +1374,9 @@ def render_insiders(store, msg="", err="") -> str:
                 f'<td class="small dim">{esc(", ".join("AS" + str(a) for a in asns[:4]))}</td>'
                 f'<td class="small dim">{len(uas)} 个</td>'
                 f'<td class="small dim">{esc((r["added_at"] or "")[:16])}</td>'
-                f'<td><form method="post" action="/insiders/remove" style="margin:0" '
+                f'<td style="white-space:nowrap">'
+                f'<button class="btn sm ghost" type="button" onclick="event.stopPropagation();impFeat(\'{esc(r["token"])}\')">导入</button> '
+                f'<form method="post" action="/insiders/remove" style="margin:0;display:inline" '
                 f'onclick="event.stopPropagation()">'
                 f'<input type="hidden" name="token" value="{esc(r["token"])}">'
                 f'<button class="btn sm ghost">移出</button></form></td></tr>')
@@ -1318,28 +1389,21 @@ def render_insiders(store, msg="", err="") -> str:
         <div style="display:flex;gap:8px">
           <button class="btn sm ghost" onclick="_copyList(_INS_EMAILS,this)">复制邮箱 ({len(all_emails)})</button>
           <button class="btn sm ghost" onclick="_copyList(_INS_IPS,this)">复制IP ({len(all_ips)})</button>
-          <button class="btn sm" type="button" onclick="openM('impFeatModal')">导入特征到特征库</button>
+          <button class="btn sm" type="button" onclick="impFeat(null)">导入特征到特征库</button>
         </div>
       </div>
-      <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>(但在名单里<b>搜索仍可找到并标注「内鬼」</b>), 它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。<b>点某行看详情</b>, 点「移出」还原回名单。</div>
-      <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js};</script>
-      {_COPYLIST_JS}
+      <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>(但在名单里<b>搜索仍可找到并标注「内鬼」</b>), 它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。<b>点某行看详情</b>, 每行「导入」可单独导入该号特征, 「移出」还原回名单。</div>
+      <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js}, _INS_FEAT={feat_js}, _INS_FEAT_ALL={agg_js};</script>
+      {_COPYLIST_JS}{_IMPFEAT_JS}
       <div class="tablewrap"><table class="grid">
         <thead><tr><th>Token</th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
     </div>
-    <div class="modal-bg" id="impFeatModal"><div class="modal">
+    <div class="modal-bg" id="impFeatModal"><div class="modal" style="width:min(680px,95vw)">
       <h3>导入内鬼特征到特征库</h3>
-      <div class="dim small">勾选要导入的类型(默认都不勾), 从全部内鬼提取并<b>自动去重</b>。</div>
       <form method="post" action="/insiders/to-featlib">
-        <div class="collist" style="margin:12px 0">
-          <label><input type="checkbox" name="kinds" value="ip"> IP</label>
-          <label><input type="checkbox" name="kinds" value="ua"> UA(整串精确)</label>
-          <label><input type="checkbox" name="kinds" value="email"> 邮箱前缀 <span class="dim small">(去掉 @域名, 如 390215162)</span></label>
-          <label><input type="checkbox" name="kinds" value="asn"> ASN <span class="dim small" style="color:#e5484d">(整机房, 会误伤同机房正常用户, 慎选)</span></label>
-          <label><input type="checkbox" name="kinds" value="hostname"> 机房名称 → 机房关键词库 <span class="dim small" style="color:#e5484d">(整机房, 慎选)</span></label>
-        </div>
+        <div id="impFeatBody" class="modalscroll" style="max-height:56vh;margin:8px 0"></div>
         <div class="modal-actions">
           <button type="button" class="btn ghost" onclick="closeM('impFeatModal')">取消</button>
           <button class="btn">导入勾选项</button>
@@ -3143,43 +3207,27 @@ class Handler(BaseHTTPRequestHandler):
                     store.delete_score(tok)   # 立即从名单移除, 不等后台重算
                 self._back(); return
             if path == "/insiders/to-featlib":
-                kinds = set(formq.get("kinds", []))   # 勾选的类型
-                if not kinds:
-                    self._to("/insiders?err=" + quote("没有勾选任何类型")); return
-                items = []          # → 特征库(signatures)
-                orgs = set()        # → 机房关键词(ASN 组织名)
-                asndb = None
-                if "hostname" in kinds:
-                    from .asn import get_asndb
-                    asndb = get_asndb()
-                for r in store.list_insiders():
-                    ips = json.loads(r["ips"] or "[]")
-                    if "ip" in kinds:
-                        for ip in ips:
-                            items.append(("ip", ip, "内鬼库导入"))
-                    if "ua" in kinds:
-                        for ua in json.loads(r["uas"] or "[]"):
-                            if ua:
-                                items.append(("ua", "^" + re.escape(ua) + "$", "内鬼库导入"))
-                    if "asn" in kinds:
-                        for a in json.loads(r["asns"] or "[]"):
-                            items.append(("asn", "AS" + str(a), "内鬼库导入"))
-                    if "email" in kinds and r["email"]:
-                        prefix = r["email"].split("@", 1)[0].strip()   # 只取 @ 前的前缀
-                        if prefix:
-                            items.append(("email", prefix, "内鬼库导入(前缀)"))
-                    if "hostname" in kinds and asndb is not None:
-                        for ip in ips:
-                            org = (asndb.lookup(ip)[1] or "").strip()
-                            if org:
-                                orgs.add(org.upper())
+                # 勾选的是具体特征值(不是类型); 字段名即类型
+                ip_v = [x for x in formq.get("ip", []) if x]
+                ua_v = [x for x in formq.get("ua", []) if x]
+                em_v = [x for x in formq.get("email", []) if x]
+                asn_v = [x for x in formq.get("asn", []) if x]
+                host_v = [x for x in formq.get("hostname", []) if x]
+                if not (ip_v or ua_v or em_v or asn_v or host_v):
+                    self._to("/insiders?err=" + quote("没有勾选任何项")); return
+                items = []
+                for ip in ip_v:
+                    items.append(("ip", ip, "内鬼库导入"))
+                for ua in ua_v:
+                    items.append(("ua", "^" + re.escape(ua) + "$", "内鬼库导入"))
+                for e in em_v:
+                    items.append(("email", e, "内鬼库导入(前缀)"))
+                for a in asn_v:
+                    items.append(("asn", a if a.upper().startswith("AS") else "AS" + a, "内鬼库导入"))
                 added = store.add_signatures_bulk(items) if items else 0
                 msg = f"内鬼库导入: 特征库 +{added} 条"
-                if "hostname" in kinds:
-                    if asndb is None:
-                        msg += " · ⚠机房名称需先装 ASN 库, 未导入"
-                    else:
-                        msg += f", 机房关键词 +{_append_hosting_keywords(orgs)} 条"
+                if host_v:
+                    msg += f", 机房关键词 +{_append_hosting_keywords([h.upper() for h in host_v])} 条"
                 self._to("/featlib?msg=" + quote(msg + "(已去重)"))
                 return
             if path == "/insiders/remove":
