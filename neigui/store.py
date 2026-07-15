@@ -310,6 +310,34 @@ class Store:
         out["excluded"] = row[0] if row else 0
         return out
 
+    def rename_panel(self, old: str, new: str) -> None:
+        """把面板名从 old 改成 new, 同步更新所有已存的用户/评分/日志/流量/内鬼库。"""
+        if not old or not new or old == new:
+            return
+        for tbl, col in (("users", "panel"), ("scores", "panel"), ("pulls", "src"),
+                         ("traffic_daily", "panel"), ("insiders", "panel")):
+            try:
+                self.conn.execute(f"UPDATE {tbl} SET {col}=? WHERE {col}=?", (new, old))
+            except sqlite3.OperationalError:
+                pass
+        self.conn.commit()
+        self.bump_data_version()
+
+    def purge_orphan_panels(self, valid) -> int:
+        """删除面板不在 valid(当前 v2board 源名集合)里的遗留用户/评分(改名/删源留下的)。"""
+        valid = [v for v in valid if v]
+        if not valid:
+            return 0
+        ph = ",".join("?" * len(valid))
+        cur = self.conn.execute(
+            f"DELETE FROM users WHERE panel IS NOT NULL AND panel<>'' AND panel NOT IN ({ph})", valid)
+        n = cur.rowcount
+        self.conn.execute(
+            f"DELETE FROM scores WHERE panel IS NOT NULL AND panel<>'' AND panel NOT IN ({ph})", valid)
+        self.conn.commit()
+        self.bump_data_version()
+        return n
+
     def score_panels(self):
         rows = self.conn.execute(
             "SELECT DISTINCT panel FROM scores WHERE panel IS NOT NULL AND panel<>'' "

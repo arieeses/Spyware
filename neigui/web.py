@@ -631,7 +631,14 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
         title, run_label, add_id = "v2board 面板", "▶ 同步全部", "addV2b"
         hint = "读 v2_user 的 token/注册时间/流量/分组, 补全用户画像。建议单独建只读账号。"
         modals = _v2b_modals()
-        extra = ""
+        extra = """
+        <div class="card">
+          <div class="dim small">改了面板名后, 已同步的用户面板已自动跟着改。若风险名单里仍有<b>改名前的旧名或已删除的面板</b>(遗留数据), 点下面清理:
+            <form method="post" action="/panels/cleanup" style="margin-top:8px"
+                  onsubmit="return confirm('删除面板不属于当前任何 v2board 源的遗留用户/评分? 建议先把要保留的面板都同步一遍再清理。')">
+              <button class="btn ghost">🧹 清理改名/删除遗留的面板数据</button></form>
+          </div>
+        </div>"""
     else:
         title, run_label, add_id = "1Panel / aaPanel 日志", "▶ 导入全部", "addLog"
         hint = ("远程面板用<b>探针接入</b>(一键安装, 自动上报日志+负载); 中央与面板同机可用本地文件。"
@@ -2667,6 +2674,8 @@ class Handler(BaseHTTPRequestHandler):
                     iv = int(form.get("interval", "300") or 300)
                     store.update_source(src["id"], name, json.dumps(cfg))
                     store.set_source_auto(src["id"], 1 if smode != "manual" else 0, iv)
+                    if src["type"] == "v2board" and name != src["name"]:
+                        store.rename_panel(src["name"], name)   # 改名同步到已存数据
                 self._back(); return
             if path == "/risk/cols":
                 checked = set(formq.get("col", []))
@@ -2686,6 +2695,11 @@ class Handler(BaseHTTPRequestHandler):
                 d = form.get("dir", "up")
                 store.move_source(int(form["id"]), "down" if d == "down" else "up")
                 self._back(); return
+            if path == "/panels/cleanup":
+                valid = {s["name"] for s in store.list_sources() if s["type"] == "v2board"}
+                n = store.purge_orphan_panels(valid)
+                self._to("/panels/v2board?msg=" + quote(f"已清理改名/删除遗留的面板数据 {n} 条用户"))
+                return
             if path == "/sources/toggle":
                 store.toggle_source(int(form["id"])); self._back(); return
             if path == "/sources/run":
