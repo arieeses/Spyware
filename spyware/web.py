@@ -1085,6 +1085,31 @@ def _count_cidrs(text: str) -> int:
     return sum(1 for ln in text.splitlines() if ln.split("#", 1)[0].strip())
 
 
+def _append_hosting_keywords(keywords) -> int:
+    """把机房组织名(大写)追加到机房关键词文件, 去重, 返回新增条数。"""
+    path = CONFIG.asn_hosting_kw_file
+    lines, existing = [], set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            for ln in f:
+                lines.append(ln.rstrip("\n"))
+                kw = ln.split("#", 1)[0].strip().upper()
+                if kw:
+                    existing.add(kw)
+    except FileNotFoundError:
+        pass
+    new = []
+    for kw in sorted(keywords):
+        k = (kw or "").strip().upper()
+        if k and k not in existing:
+            existing.add(k)
+            new.append(k)
+    if new:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines + ["# —— 内鬼库导入的机房名称 ——"] + new) + "\n")
+    return len(new)
+
+
 def _setting_row(label, desc, action, content, extra="", rows=6) -> str:
     """命名+提示在上, 可编辑字段在下。rows 控制文本框高度。"""
     return f"""
@@ -1293,9 +1318,7 @@ def render_insiders(store, msg="", err="") -> str:
         <div style="display:flex;gap:8px">
           <button class="btn sm ghost" onclick="_copyList(_INS_EMAILS,this)">复制邮箱 ({len(all_emails)})</button>
           <button class="btn sm ghost" onclick="_copyList(_INS_IPS,this)">复制IP ({len(all_ips)})</button>
-          <form method="post" action="/insiders/to-featlib" style="margin:0"
-                onsubmit="return confirm('把全部内鬼的 IP/邮箱/UA 导入特征库(自动去重)? 注意 ASN 不导入, 以免整机房误伤')">
-            <button class="btn sm">导入特征到特征库</button></form>
+          <button class="btn sm" type="button" onclick="openM('impFeatModal')">导入特征到特征库</button>
         </div>
       </div>
       <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>(但在名单里<b>搜索仍可找到并标注「内鬼」</b>), 它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。<b>点某行看详情</b>, 点「移出」还原回名单。</div>
@@ -1305,7 +1328,24 @@ def render_insiders(store, msg="", err="") -> str:
         <thead><tr><th>Token</th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
-    </div>"""
+    </div>
+    <div class="modal-bg" id="impFeatModal"><div class="modal">
+      <h3>导入内鬼特征到特征库</h3>
+      <div class="dim small">勾选要导入的类型(默认都不勾), 从全部内鬼提取并<b>自动去重</b>。</div>
+      <form method="post" action="/insiders/to-featlib">
+        <div class="collist" style="margin:12px 0">
+          <label><input type="checkbox" name="kinds" value="ip"> IP</label>
+          <label><input type="checkbox" name="kinds" value="ua"> UA(整串精确)</label>
+          <label><input type="checkbox" name="kinds" value="email"> 邮箱前缀 <span class="dim small">(去掉 @域名, 如 390215162)</span></label>
+          <label><input type="checkbox" name="kinds" value="asn"> ASN <span class="dim small" style="color:#e5484d">(整机房, 会误伤同机房正常用户, 慎选)</span></label>
+          <label><input type="checkbox" name="kinds" value="hostname"> 机房名称 → 机房关键词库 <span class="dim small" style="color:#e5484d">(整机房, 慎选)</span></label>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" onclick="closeM('impFeatModal')">取消</button>
+          <button class="btn">导入勾选项</button>
+        </div>
+      </form>
+    </div></div>"""
 
 
 _WL_CATS = [
@@ -3103,19 +3143,44 @@ class Handler(BaseHTTPRequestHandler):
                     store.delete_score(tok)   # 立即从名单移除, 不等后台重算
                 self._back(); return
             if path == "/insiders/to-featlib":
-                items = []
+                kinds = set(formq.get("kinds", []))   # 勾选的类型
+                if not kinds:
+                    self._to("/insiders?err=" + quote("没有勾选任何类型")); return
+                items = []          # → 特征库(signatures)
+                orgs = set()        # → 机房关键词(ASN 组织名)
+                asndb = None
+                if "hostname" in kinds:
+                    from .asn import get_asndb
+                    asndb = get_asndb()
                 for r in store.list_insiders():
-                    for ip in json.loads(r["ips"] or "[]"):
-                        items.append(("ip", ip, "内鬼库导入"))
-                    for ua in json.loads(r["uas"] or "[]"):
-                        if ua:
-                            items.append(("ua", "^" + re.escape(ua) + "$", "内鬼库导入"))
-                    if r["email"]:
-                        items.append(("email", r["email"], "内鬼库导入"))
-                    # ASN 不导入: 整机房(如 AS16509=AWS)会误伤所有同机房用户; insider_asn 信号已按合理权重覆盖
+                    ips = json.loads(r["ips"] or "[]")
+                    if "ip" in kinds:
+                        for ip in ips:
+                            items.append(("ip", ip, "内鬼库导入"))
+                    if "ua" in kinds:
+                        for ua in json.loads(r["uas"] or "[]"):
+                            if ua:
+                                items.append(("ua", "^" + re.escape(ua) + "$", "内鬼库导入"))
+                    if "asn" in kinds:
+                        for a in json.loads(r["asns"] or "[]"):
+                            items.append(("asn", "AS" + str(a), "内鬼库导入"))
+                    if "email" in kinds and r["email"]:
+                        prefix = r["email"].split("@", 1)[0].strip()   # 只取 @ 前的前缀
+                        if prefix:
+                            items.append(("email", prefix, "内鬼库导入(前缀)"))
+                    if "hostname" in kinds and asndb is not None:
+                        for ip in ips:
+                            org = (asndb.lookup(ip)[1] or "").strip()
+                            if org:
+                                orgs.add(org.upper())
                 added = store.add_signatures_bulk(items) if items else 0
-                self._to("/featlib?msg=" + quote(
-                    f"从内鬼库导入 {added} 条新特征(IP/邮箱/UA, 去重跳过 {len(items) - added} 条; ASN 未导入)"))
+                msg = f"内鬼库导入: 特征库 +{added} 条"
+                if "hostname" in kinds:
+                    if asndb is None:
+                        msg += " · ⚠机房名称需先装 ASN 库, 未导入"
+                    else:
+                        msg += f", 机房关键词 +{_append_hosting_keywords(orgs)} 条"
+                self._to("/featlib?msg=" + quote(msg + "(已去重)"))
                 return
             if path == "/insiders/remove":
                 tok = form.get("token", "").strip()
