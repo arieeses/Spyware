@@ -1781,6 +1781,37 @@ def _restart_only():
     os.execv(sys.executable, [sys.executable, "-m", "neigui.web", *sys.argv[1:]])
 
 
+def _relabel_log_sources(store, old: str, new: str) -> None:
+    """v2board 改名后, 把日志源里用旧名做的归属标签/面板改成新名, 让新拉取也用新名(不再分裂)。"""
+    for ls in store.list_sources():
+        if ls["type"] != "logfile":
+            continue
+        try:
+            c = json.loads(ls["config"] or "{}")
+        except (ValueError, TypeError):
+            continue
+        changed = False
+        if c.get("panel") == old:
+            c["panel"] = new
+            changed = True
+        key = "log_path" if c.get("mode") == "agent" else "path"
+        spec = c.get(key)
+        if spec:
+            lines = []
+            for line in spec.splitlines():
+                if "|" in line:
+                    p, _, lb = line.partition("|")
+                    if lb.strip() == old:
+                        line = p.rstrip() + " | " + new
+                        changed = True
+                lines.append(line)
+            c[key] = "\n".join(lines)
+        if changed:
+            store.update_source_config(ls["id"], json.dumps(c))
+            if c.get("mode") == "agent":
+                store.set_kv(f"agent_force::{c.get('key', '')}", "1")   # 通知探针用新标签重传
+
+
 def _extract_multipart_file(content_type: str, raw: bytes):
     """从 multipart/form-data 里取出上传文件的原始字节(单文件)。"""
     import re
@@ -2676,6 +2707,7 @@ class Handler(BaseHTTPRequestHandler):
                     store.set_source_auto(src["id"], 1 if smode != "manual" else 0, iv)
                     if src["type"] == "v2board" and name != src["name"]:
                         store.rename_panel(src["name"], name)   # 改名同步到已存数据
+                        _relabel_log_sources(store, src["name"], name)  # 日志源标签也跟着改
                 self._back(); return
             if path == "/risk/cols":
                 checked = set(formq.get("col", []))
