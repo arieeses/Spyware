@@ -1013,11 +1013,14 @@ def render_rules(store, msg="", err="") -> str:
         f'<td>{_rule_toggle(k, off)}</td></tr>' for k, v in th.items())
     return f"""{_card_alert(msg, err)}
     <div class="card">
-      <div class="tabs">
-        <a class="tab active" id="rtab_w" onclick="rTab(1)">信号权重</a>
-        <a class="tab" id="rtab_t" onclick="rTab(0)">阈值参数</a>
-      </div>
       <form method="post" action="/rules/save">
+        <div class="tabs" style="align-items:center;margin-bottom:12px">
+          <a class="tab active" id="rtab_w" onclick="rTab(1)">信号权重</a>
+          <a class="tab" id="rtab_t" onclick="rTab(0)">阈值参数</a>
+          <button class="btn sm" style="margin-left:auto">保存全部</button>
+          <button class="btn sm ghost" formaction="/rules/reset" formnovalidate
+                  onclick="return confirm('恢复为代码内置默认值?')">恢复默认</button>
+        </div>
         <div id="rw_weights">
           <div class="dim small" style="margin:4px 0 10px">命中程度 × 权重 = 得分。直接改数值或开关, 点「保存全部」即生效。</div>
           <table class="grid" id="tbl_w"><thead><tr><th>信号</th><th>说明</th><th>权重</th><th>启用</th></tr></thead><tbody>{wl}</tbody></table>
@@ -1027,11 +1030,6 @@ def render_rules(store, msg="", err="") -> str:
           <div class="dim small" style="margin:4px 0 10px">阈值参数; 「自有IP排除」开关关闭即停用排除层。</div>
           <table class="grid" id="tbl_t"><thead><tr><th>参数</th><th>值</th><th>启用</th></tr></thead><tbody>{tl}</tbody></table>
           <div class="pager" id="pg_t"></div>
-        </div>
-        <div style="margin-top:16px;display:flex;gap:8px;align-items:center">
-          <button class="btn">保存全部</button>
-          <button class="btn ghost" formaction="/rules/reset" formnovalidate
-                  onclick="return confirm('恢复为代码内置默认值?')">恢复默认</button>
         </div>
       </form>
     </div>""" + _RULES_JS
