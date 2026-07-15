@@ -30,8 +30,13 @@ class TokenFeatures:
     down30: int = 0               # 近30天下行字节
     feature_hit: bool = False     # 命中特征库(手工)
     feature_reason: str = ""
-    insider_hit: bool = False     # 与内鬼库已确认账号共用特征
-    insider_reason: str = ""
+    # 内鬼库分维度命中
+    ins_ip: bool = False          # 与内鬼同一IP(精确)
+    ins_subnet: bool = False      # 与内鬼同一网段
+    ins_asn: bool = False         # 与内鬼同一ASN
+    ins_ua: bool = False          # 与内鬼同一UA
+    ins_prefix: bool = False      # 邮箱前缀与内鬼相同
+    ins_tag_sets: object = None   # 内鬼行为标签集(供 score_token 算行为相似)
     main_ip: Optional[str] = None  # 代表 IP(最近一次拉取), 供「同IP」下钻
     asn_type_counts: Dict[str, int] = field(default_factory=dict)
     hosting_ratio: float = 0.0
@@ -72,7 +77,7 @@ def build_features(token: str, pull_rows: List, user_row,
                    now: datetime = None, ip_panels: dict = None,
                    email_panels: dict = None, featlib=None,
                    burst_window: int = 120,
-                   night_start: int = 2, night_end: int = 6, insiderlib=None) -> TokenFeatures:
+                   night_start: int = 2, night_end: int = 6, insmatch=None) -> TokenFeatures:
     f = TokenFeatures(token=token)
     f.pull_count = len(pull_rows)
 
@@ -201,11 +206,13 @@ def build_features(token: str, pull_rows: List, user_row,
         if reason:
             f.feature_hit = True
             f.feature_reason = reason
-    # 内鬼库匹配(与已确认内鬼共用特征)
-    if insiderlib is not None and not insiderlib.empty:
-        reason = insiderlib.match(ips, uas, f.email, asndb)
-        if reason:
-            f.insider_hit = True
-            f.insider_reason = reason
+    # 内鬼库分维度匹配(精确IP/网段/ASN/UA/邮箱前缀; 行为相似留给 score_token)
+    if insmatch is not None and not insmatch.empty:
+        f.ins_ip = insmatch.hit_ip(ips)
+        f.ins_subnet = insmatch.hit_subnet(ips)
+        f.ins_asn = insmatch.hit_asn(ips, asndb)
+        f.ins_ua = insmatch.hit_ua(uas)
+        f.ins_prefix = insmatch.hit_prefix(f.email)
+        f.ins_tag_sets = insmatch  # 传匹配器, score_token 用累计标签算行为相似
 
     return f

@@ -48,7 +48,13 @@ class Weights:
     fixed_schedule: float = 12.0     # 拉取时刻固定在一天内某窄时段(cron/自动化)
     traffic_symmetry: float = 18.0   # 近30天上下行接近对称(中转/攻击, 非真人下载型)
     feature_lib: float = 50.0        # 命中手工登记的特征库(IP/UA/ASN/邮箱)
-    insider_lib: float = 60.0        # 与内鬼库已确认账号共用特征(同伙, 强)
+    # —— 内鬼库分维度匹配(每个独立开关) ——
+    insider_ip: float = 55.0         # 与内鬼同一个 IP(精确)
+    insider_subnet: float = 30.0     # 与内鬼同一网段(默认/24)
+    insider_asn: float = 22.0        # 与内鬼同一 ASN
+    insider_ua: float = 35.0         # 与内鬼用同一客户端/UA(整串)
+    insider_pattern: float = 25.0    # 行为模式与内鬼相似(命中相同的一组信号)
+    insider_prefix: float = 30.0     # 邮箱前缀与内鬼相同(如 bintest_vpn@任意域名)
     night_pull: float = 12.0         # 北京时间深夜(默认2-6点)仍在拉订阅(真人多在睡觉)
     blacklist_hit: float = 60.0      # 命中黑名单(IP/UA/ASN, 强, 直接判高危)
     # —— 节点侧信号(需节点日志, 增量5接入, 暂占位) ——
@@ -99,6 +105,9 @@ class Thresholds:
     night_start_hour: int = 2
     night_end_hour: int = 6
     night_min_pulls: int = 3
+    # 内鬼库匹配: 同网段的网段长度(24=/24); 行为相似需与某内鬼共享的信号数下限
+    insider_subnet_prefix: int = 24
+    insider_pattern_min: int = 3
     # 在线IP: 一个 token 近期活跃 IP 数达此值即判「多IP在线」
     online_ips_min: int = 6
     # IP共用: 该 token 的某个IP被这么多不同账号共用即判「IP共用」

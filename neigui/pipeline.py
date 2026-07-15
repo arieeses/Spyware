@@ -94,7 +94,7 @@ def recompute_scores(store: Store, cfg: Config = None) -> int:
 def recompute_one(store: Store, token: str, cfg: Config = None) -> None:
     """只重算并写回单个 token 的评分(移出内鬼库后立即让它回名单, 不等后台全量)。"""
     from datetime import datetime, timedelta, timezone
-    from .enrich import Blacklist, IpClassifier, UaClassifier, FeatureLib
+    from .enrich import Blacklist, IpClassifier, UaClassifier, FeatureLib, InsiderMatcher
     cfg = cfg or load_config(store)
     if token in store.insider_tokens():
         return
@@ -108,7 +108,7 @@ def recompute_one(store: Store, token: str, cfg: Config = None) -> None:
         ip_users=store.ip_user_counts_for_token(token, since_iso),
         window_hours=win_h, now=now,
         ip_panels=store.ip_panel_map(), email_panels=store.email_panel_map(),
-        featlib=FeatureLib(store), insiderlib=FeatureLib.from_insiders(store),
+        featlib=FeatureLib(store), insmatch=InsiderMatcher(store, cfg.thresholds.insider_subnet_prefix),
         burst_window=cfg.thresholds.burst_ua_window,
         night_start=cfg.thresholds.night_start_hour, night_end=cfg.thresholds.night_end_hour)
     store.upsert_score(_score_row(score_token(feats, cfg, off)))
@@ -142,9 +142,9 @@ def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
     win_h = cfg.thresholds.online_window_hours
     now = datetime.now(timezone.utc)
     since_iso = (now - timedelta(hours=max(1, win_h))).isoformat()
-    from .enrich import FeatureLib
+    from .enrich import FeatureLib, InsiderMatcher
     featlib = FeatureLib(store)                       # 特征库(手工登记)
-    insiderlib = FeatureLib.from_insiders(store)      # 内鬼库(已确认账号快照特征)
+    insmatch = InsiderMatcher(store, cfg.thresholds.insider_subnet_prefix)  # 内鬼库分维度匹配
     insiders = store.insider_tokens()                 # 已移入内鬼库的账号: 不再评分/进名单
     ip_users = store.ip_user_counts(since_iso)   # 窗口内 IP→不同账号数
     ip_panels = store.ip_panel_map()             # IP→面板集合(跨面板同IP)
@@ -160,7 +160,7 @@ def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
         feats = build_features(token, store.pulls_for(token), store.user(token), ipc, uac, bl,
                                ip_users=ip_users, window_hours=win_h, now=now,
                                ip_panels=ip_panels, email_panels=email_panels, featlib=featlib,
-                               burst_window=bw, night_start=ns, night_end=ne, insiderlib=insiderlib)
+                               burst_window=bw, night_start=ns, night_end=ne, insmatch=insmatch)
         results.append(score_token(feats, cfg, off))
     # 同步来但暂无拉取日志的用户: 仍按"画像信号"评分(如「有效期内零流量新号」重点排查),
     # 无拉取所以 IP/UA/ASN 等日志类信号不触发。空拉取的 build_features 很轻。
@@ -169,7 +169,7 @@ def _analyze(store: Store, cfg: Config = CONFIG) -> List[RiskResult]:
             continue
         feats = build_features(u["token"], [], u, ipc, uac, bl,
                                ip_users=ip_users, window_hours=win_h, now=now,
-                               email_panels=email_panels, featlib=featlib, insiderlib=insiderlib)
+                               email_panels=email_panels, featlib=featlib, insmatch=insmatch)
         results.append(score_token(feats, cfg, off))
     results.sort(key=lambda r: r.score, reverse=True)
     return results

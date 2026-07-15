@@ -157,10 +157,25 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
         signals.append(Signal("命中特征库", w.feature_lib,
             f.feature_reason or "命中特征库", tag="特征命中"))
 
-    # 命中内鬼库(与已确认内鬼共用 IP/UA/ASN/邮箱): 强信号(同伙)
-    if on("insider_lib") and f.insider_hit:
-        signals.append(Signal("命中内鬼库", w.insider_lib,
-            f.insider_reason or "与已确认内鬼特征相同", tag="内鬼同伙"))
+    # 内鬼库分维度匹配(每个独立开关)
+    if on("insider_ip") and f.ins_ip:
+        signals.append(Signal("内鬼同IP", w.insider_ip, "与已确认内鬼同一个IP", tag="内鬼同IP"))
+    if on("insider_subnet") and f.ins_subnet:
+        signals.append(Signal("内鬼同网段", w.insider_subnet,
+            f"与已确认内鬼同一网段(/{th.insider_subnet_prefix})", tag="内鬼同网段"))
+    if on("insider_asn") and f.ins_asn:
+        signals.append(Signal("内鬼同ASN", w.insider_asn, "与已确认内鬼同一ASN(同机房)", tag="内鬼同ASN"))
+    if on("insider_ua") and f.ins_ua:
+        signals.append(Signal("内鬼同UA", w.insider_ua, "与已确认内鬼用同一客户端/UA", tag="内鬼同UA"))
+    if on("insider_prefix") and f.ins_prefix:
+        signals.append(Signal("内鬼同邮箱前缀", w.insider_prefix, "邮箱前缀与已确认内鬼相同", tag="内鬼同邮箱"))
+    # 行为相似: 用累计到此的信号标签, 与内鬼行为标签比对
+    if on("insider_pattern") and f.ins_tag_sets is not None:
+        mytags = {s.tag for s in signals if s.tag}
+        shared = f.ins_tag_sets.pattern_shared(mytags)
+        if shared >= th.insider_pattern_min:
+            signals.append(Signal("内鬼行为相似", w.insider_pattern,
+                f"与某已确认内鬼命中相同的 {shared} 个信号, 行为高度相似", tag="内鬼行为"))
 
     # 11. 跨面板同IP: 该 token 的拉取 IP 横跨多个前端面板(一台机器打多个机场)
     if on("cross_panel_ip") and f.cross_panel_ips >= th.cross_panel_ip_min:

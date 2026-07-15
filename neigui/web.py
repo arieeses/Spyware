@@ -267,7 +267,7 @@ def _user_detail(store, tok: str) -> dict:
     win_h = _cfg.thresholds.online_window_hours
     _now = datetime.now(timezone.utc)
     _since = (_now - timedelta(hours=max(1, win_h))).isoformat()
-    from .enrich import FeatureLib
+    from .enrich import FeatureLib, InsiderMatcher
     r = score_token(build_features(tok, pulls, user, IpClassifier(), UaClassifier(), Blacklist(),
                                    ip_users=store.ip_user_counts_for_token(tok, _since),
                                    window_hours=win_h, now=_now,
@@ -275,7 +275,7 @@ def _user_detail(store, tok: str) -> dict:
                                    featlib=FeatureLib(store), burst_window=_cfg.thresholds.burst_ua_window,
                                    night_start=_cfg.thresholds.night_start_hour,
                                    night_end=_cfg.thresholds.night_end_hour,
-                                   insiderlib=FeatureLib.from_insiders(store)),
+                                   insmatch=InsiderMatcher(store, _cfg.thresholds.insider_subnet_prefix)),
                     _cfg, _disabled_signals(store))
     plan = user["plan"] if user and "plan" in user.keys() else None
     has_plan = bool(plan and str(plan) not in ("", "0", "None"))
@@ -936,7 +936,12 @@ WEIGHT_CN = {
     "fixed_schedule": ("固定时段拉取", "拉取时刻跨多天却高度集中在某窄时段, 呈 cron/自动化"),
     "traffic_symmetry": ("流量上下行对称", "近30天上下行接近对称(真人应下行远大于上行), 疑似中转/攻击"),
     "feature_lib": ("命中特征库", "命中你手工登记的特征(IP/UA/ASN/邮箱), 强信号"),
-    "insider_lib": ("命中内鬼库", "与内鬼库已确认账号共用 IP/UA/ASN/邮箱(同伙), 强信号"),
+    "insider_ip": ("内鬼同IP", "与内鬼库已确认账号用同一个 IP(精确), 极强"),
+    "insider_subnet": ("内鬼同网段", "与内鬼在同一网段(默认/24, 机房常整段作恶)"),
+    "insider_asn": ("内鬼同ASN", "与内鬼在同一 ASN(同机房)"),
+    "insider_ua": ("内鬼同UA", "与内鬼用同一客户端/UA(整串精确)"),
+    "insider_pattern": ("内鬼行为相似", "命中与某已确认内鬼相同的一组信号, 行为高度相似"),
+    "insider_prefix": ("内鬼同邮箱前缀", "邮箱前缀与内鬼相同(如 bintest_vpn@任意域名)"),
     "night_pull": ("深夜拉取", "北京时间凌晨2-6点仍在规律拉订阅, 非真人作息, 疑似自动化"),
     "ip_silence": ("拉取后IP静默", "拉取IP 拉完就不通/从不连节点(需节点侧日志)"),
     "scan_pattern": ("扫描式短连", "遍历所有节点每个只碰一次(需节点侧日志)"),
@@ -952,6 +957,8 @@ THRESH_CN = {
     "burst_ua_min": "短时多UA-窗口内UA数下限", "burst_ua_window": "短时多UA-窗口秒数",
     "night_start_hour": "深夜拉取-起点(北京时,含)", "night_end_hour": "深夜拉取-终点(北京时,不含)",
     "night_min_pulls": "深夜拉取-次数下限",
+    "insider_subnet_prefix": "内鬼同网段-网段长度(24=/24)",
+    "insider_pattern_min": "内鬼行为相似-共享信号数下限",
     "cross_panel_ip_min": "跨面板同IP-面板数下限", "email_panel_min": "同邮箱多面板-面板数下限",
     "fixed_min_pulls": "固定时段-最少拉取次数", "fixed_min_days": "固定时段-最少跨天数",
     "fixed_concentration": "固定时段-时刻聚集度阈值(0~1)",
@@ -2628,9 +2635,10 @@ class Handler(BaseHTTPRequestHandler):
                     uas = sorted({p["ua"] for p in pulls if p["ua"]})
                     asns = sorted({asndb.lookup(ip)[0] for ip in ips
                                    if asndb and asndb.lookup(ip)[0]}) if asndb else []
+                    tags = store.score_tags(tok)   # 快照其行为标签(供「内鬼行为相似」比对)
                     store.add_insider(tok, email=(u["email"] if u else None),
                                       panel=(u["panel"] if u and "panel" in u.keys() else None),
-                                      ips=ips, uas=uas, asns=list(asns))
+                                      ips=ips, uas=uas, asns=list(asns), tags=tags)
                     store.delete_score(tok)   # 立即从名单移除, 不等后台重算
                 self._back(); return
             if path == "/insiders/remove":

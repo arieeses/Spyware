@@ -199,6 +199,7 @@ _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN up30 INTEGER DEFAULT 0",
     "ALTER TABLE users ADD COLUMN down30 INTEGER DEFAULT 0",
     "ALTER TABLE scores ADD COLUMN main_ip TEXT",
+    "ALTER TABLE insiders ADD COLUMN tags TEXT",
 ]
 
 
@@ -513,19 +514,27 @@ class Store:
 
     # —— 内鬼库(已确认账号, 一键移入) ——
     def add_insider(self, token, email=None, panel=None, ips=None, uas=None,
-                    asns=None, note="") -> None:
+                    asns=None, note="", tags=None) -> None:
         import json as _json
         self.conn.execute(
-            "INSERT INTO insiders(token, email, panel, ips, uas, asns, note, added_at) "
-            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(token) DO UPDATE SET "
+            "INSERT INTO insiders(token, email, panel, ips, uas, asns, note, added_at, tags) "
+            "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(token) DO UPDATE SET "
             "email=excluded.email, panel=excluded.panel, ips=excluded.ips, "
-            "uas=excluded.uas, asns=excluded.asns",
+            "uas=excluded.uas, asns=excluded.asns, tags=excluded.tags",
             (token, email, panel, _json.dumps(ips or [], ensure_ascii=False),
              _json.dumps(uas or [], ensure_ascii=False),
              _json.dumps(asns or [], ensure_ascii=False), note,
-             datetime.now().isoformat(timespec="seconds")))
+             datetime.now().isoformat(timespec="seconds"),
+             _json.dumps(tags or [], ensure_ascii=False)))
         self.conn.commit()
         self.bump_data_version()
+
+    def score_tags(self, token: str):
+        """读某 token 当前物化评分的标签(移入内鬼库时快照其行为标签)。"""
+        row = self.conn.execute("SELECT tags FROM scores WHERE token=?", (token,)).fetchone()
+        if not row or not row["tags"]:
+            return []
+        return [t for t in row["tags"].split(",") if t]
 
     def remove_insider(self, token) -> None:
         self.conn.execute("DELETE FROM insiders WHERE token=?", (token,))

@@ -236,6 +236,89 @@ class FeatureLib:
         return ""
 
 
+class InsiderMatcher:
+    """内鬼库分维度匹配: 精确IP / 同网段 / 同ASN / 同UA / 邮箱前缀 / 行为模式相似。
+    数据来自内鬼库(已确认账号快照的 ips/uas/asns/email/tags)。"""
+
+    def __init__(self, store, subnet_prefix: int = 24):
+        import json as _json
+        self.ips = set()
+        self.subnets: List = []
+        self.asns = set()
+        self.uas = set()
+        self.prefixes = set()
+        self.tag_sets: List = []
+        try:
+            rows = store.list_insiders()
+        except Exception:  # noqa: BLE001
+            rows = []
+        for r in rows:
+            keys = r.keys()
+            for ip in _json.loads(r["ips"] or "[]"):
+                self.ips.add(ip)
+                try:
+                    self.subnets.append(ipaddress.ip_network(f"{ip}/{subnet_prefix}", strict=False))
+                except ValueError:
+                    pass
+            for ua in _json.loads(r["uas"] or "[]"):
+                if ua:
+                    self.uas.add(ua)
+            for a in _json.loads(r["asns"] or "[]"):
+                try:
+                    self.asns.add(int(a))
+                except (ValueError, TypeError):
+                    pass
+            if r["email"] and "@" in r["email"]:
+                self.prefixes.add(r["email"].split("@")[0].lower())
+            if "tags" in keys and r["tags"]:
+                try:
+                    ts = _json.loads(r["tags"])
+                    if ts:
+                        self.tag_sets.append(frozenset(ts))
+                except (ValueError, TypeError):
+                    pass
+        self.empty = not (self.ips or self.asns or self.uas or self.prefixes or self.tag_sets)
+
+    def hit_ip(self, ips) -> bool:
+        return any(ip in self.ips for ip in (ips or ()))
+
+    def hit_subnet(self, ips) -> bool:
+        for ip in (ips or ()):
+            if ip in self.ips:
+                continue   # 精确的归「同IP」, 不重复计
+            try:
+                addr = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if any(addr in n for n in self.subnets):
+                return True
+        return False
+
+    def hit_asn(self, ips, asndb) -> bool:
+        if not self.asns or asndb is None:
+            return False
+        for ip in (ips or ()):
+            asn, _ = asndb.lookup(ip)
+            if asn and asn in self.asns:
+                return True
+        return False
+
+    def hit_ua(self, uas) -> bool:
+        return any(u in self.uas for u in (uas or ()))
+
+    def hit_prefix(self, email) -> bool:
+        if not email or "@" not in email:
+            return False
+        return email.split("@")[0].lower() in self.prefixes
+
+    def pattern_shared(self, tags) -> int:
+        """与某个内鬼共享的信号标签数(取最大)。"""
+        if not self.tag_sets or not tags:
+            return 0
+        mine = set(tags)
+        return max((len(mine & ts) for ts in self.tag_sets), default=0)
+
+
 class UaClassifier:
     def __init__(self, clients_file: Optional[str] = None):
         self.client_patterns = _load_patterns(clients_file or CONFIG.ua_clients_file)
