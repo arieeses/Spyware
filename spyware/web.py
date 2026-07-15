@@ -1334,6 +1334,8 @@ def render_insiders(store, msg="", err="") -> str:
         asndb = get_asndb()
     except Exception:  # noqa: BLE001
         asndb = None
+    from .enrich import IpClassifier
+    ipc = IpClassifier()   # 用于导入时过滤自有/反代 IP
     feat = {}
     agg = {"ip": set(), "ua": set(), "email": set(), "asn": set(), "host": set()}
     for r in rows:
@@ -1342,14 +1344,15 @@ def render_insiders(store, msg="", err="") -> str:
         asns = _json.loads(r["asns"] or "[]")
         email = (r["email"] or "").strip()
         prefix = email.split("@", 1)[0] if email else ""
+        ips_imp = [i for i in ips if i and not ipc.is_self_ip(i)]   # 自有/反代IP不导入
         hosts = []
         if asndb is not None:
-            for ip in ips:
+            for ip in ips_imp:
                 org = (asndb.lookup(ip)[1] or "").strip().upper()
                 if org:
                     hosts.append(org)
         entry = {
-            "ip": sorted({i for i in ips if i}),
+            "ip": sorted(set(ips_imp)),
             "ua": sorted({u for u in uas if u}),
             "email": [prefix] if prefix else [],
             "asn": ["AS" + str(a) for a in sorted(set(asns))],
@@ -1457,7 +1460,8 @@ def _wl_hub(items, title, intro, back_href, msg="", err="") -> str:
 
 
 def render_whitelist(msg="", err="", cat="", tab="white", sub="") -> str:
-    tab = "black" if tab == "black" else "white"
+    if tab not in ("white", "black", "self"):
+        tab = "white"
 
     # 顶层入口页: 四个分类按钮
     if cat not in ("self", "ua", "hosting", "proxy"):
@@ -1486,10 +1490,18 @@ def render_whitelist(msg="", err="", cat="", tab="white", sub="") -> str:
                                 "/whitelist/save-self", _read_file(CONFIG.self_ips_file), rows=22)
     elif cat == "ua":
         title = "客户端 UA"
-        subtabs = _wl_subtabs("ua", tab)
+        subtabs = (
+            f'<div class="subtabs">'
+            f'<a class="subtab {"active" if tab=="white" else ""}" href="/whitelist?cat=ua&tab=white">白名单</a>'
+            f'<a class="subtab {"active" if tab=="black" else ""}" href="/whitelist?cat=ua&tab=black">黑名单</a>'
+            f'<a class="subtab {"active" if tab=="self" else ""}" href="/whitelist?cat=ua&tab=self">自有UA</a>'
+            f'</div>')
         if tab == "black":
             body = _setting_row("UA 黑名单", "攻击脚本/爬虫特征 UA。命中即判高危。每行一个正则。",
                                 "/blacklist/save-ua", _read_file(CONFIG.ua_blacklist_file), rows=22)
+        elif tab == "self":
+            body = _setting_row("自有 UA", "你自己的抓取/监控工具 UA(subconverter/健康检查等), 每行一个正则; 命中即视为<b>自有设备, 不参与评分</b>。",
+                                "/whitelist/save-uaself", _read_file(CONFIG.ua_self_file), rows=22)
         else:
             body = _setting_row("客户端 UA 白名单", "正规客户端 UA(clash/v2rayN/Shadowrocket 等), 每行一个正则; 配合住宅 ASN 视为正常。",
                                 "/whitelist/save-ua", _read_file(CONFIG.ua_clients_file), rows=22)
@@ -3214,6 +3226,9 @@ class Handler(BaseHTTPRequestHandler):
                 host_v = [x for x in formq.get("hostname", []) if x]
                 if not (ip_v or ua_v or em_v or asn_v or host_v):
                     self._to("/insiders?err=" + quote("没有勾选任何项")); return
+                from .enrich import IpClassifier
+                _ipc = IpClassifier()
+                ip_v = [ip for ip in ip_v if not _ipc.is_self_ip(ip)]   # 自有/反代IP不导入
                 items = []
                 for ip in ip_v:
                     items.append(("ip", ip, "内鬼库导入"))
@@ -3280,6 +3295,10 @@ class Handler(BaseHTTPRequestHandler):
                 with open(CONFIG.ua_clients_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
                 self._to("/whitelist?cat=ua&tab=white&msg=" + quote("UA 白名单已保存")); return
+            if path == "/whitelist/save-uaself":
+                with open(CONFIG.ua_self_file, "w", encoding="utf-8") as f:
+                    f.write(form.get("content", ""))
+                self._to("/whitelist?cat=ua&tab=self&msg=" + quote("自有 UA 已保存")); return
             if path == "/whitelist/save-proxy":
                 with open(CONFIG.proxy_ips_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))

@@ -38,9 +38,20 @@ class IpClassifier:
 
     def __init__(self, self_file: Optional[str] = None, hosting_file: Optional[str] = None):
         self.self_nets = _load_cidrs(self_file or CONFIG.self_ips_file)
+        self.proxy_nets = _load_cidrs(CONFIG.proxy_ips_file)   # 反代/中转也算自有设备
         self.hosting_nets = _load_cidrs(hosting_file or CONFIG.hosting_cidrs_file)
         from .asn import get_asndb
         self.asndb = get_asndb()  # 缓存单例; 无库时为 None
+
+    def is_self_ip(self, ip: str) -> bool:
+        """自有设备 IP: 自有基础设施名单 / 反代中转名单 / 内网。"""
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        if any(addr in n for n in self.self_nets) or any(addr in n for n in self.proxy_nets):
+            return True
+        return addr.is_private
 
     def classify(self, ip: str) -> str:
         try:
@@ -51,6 +62,9 @@ class IpClassifier:
         for net in self.self_nets:
             if addr in net:
                 return "self"
+        for net in self.proxy_nets:
+            if addr in net:
+                return "self"   # 反代/中转 IP 视为自有设备
         for net in self.hosting_nets:
             if addr in net:
                 return "hosting"
@@ -158,6 +172,7 @@ class FeatureLib:
         self.ua_pats: List[str] = []
         self.asns = set()
         self.emails: List[str] = []
+        self.exempt_nets = _load_cidrs(CONFIG.self_ips_file) + _load_cidrs(CONFIG.proxy_ips_file)
         if _rows is None:
             try:
                 _rows = [(r["kind"], r["value"]) for r in store.list_signatures()]
@@ -220,6 +235,8 @@ class FeatureLib:
                 addr = ipaddress.ip_address(ip)
             except ValueError:
                 continue
+            if any(addr in n for n in self.exempt_nets):
+                continue   # 自有IP/反代IP 不参与特征库匹配
             for n in self.ip_nets:
                 if addr in n:
                     add(f"IP {ip}" if n.num_addresses == 1 else f"IP段 {n}")
@@ -331,6 +348,12 @@ class InsiderMatcher:
 class UaClassifier:
     def __init__(self, clients_file: Optional[str] = None):
         self.client_patterns = _load_patterns(clients_file or CONFIG.ua_clients_file)
+        self.self_patterns = _load_patterns(CONFIG.ua_self_file)   # 自有UA(你自己的工具)
+
+    def is_self(self, ua: str) -> bool:
+        """自有 UA: 命中自有UA名单(你自己的抓取/监控工具), 不参与评分。"""
+        ua = ua or ""
+        return any(re.search(p, ua, re.IGNORECASE) for p in self.self_patterns)
 
     def classify(self, ua: str) -> UaInfo:
         ua = ua or ""

@@ -124,6 +124,7 @@ class Config:
     self_ips_file: str = os.path.join(DATA_DIR, "self_ips.txt")
     hosting_cidrs_file: str = os.path.join(DATA_DIR, "hosting_cidrs.txt")
     ua_clients_file: str = os.path.join(DATA_DIR, "ua_clients.txt")
+    ua_self_file: str = os.path.join(DATA_DIR, "ua_self.txt")   # 自有UA(你自己的抓取/监控工具), 不参与评分
     ip_blacklist_file: str = os.path.join(DATA_DIR, "ip_blacklist.txt")
     ua_blacklist_file: str = os.path.join(DATA_DIR, "ua_blacklist.txt")
     asn_blacklist_file: str = os.path.join(DATA_DIR, "asn_blacklist.txt")

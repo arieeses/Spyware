@@ -96,8 +96,13 @@ def build_features(token: str, pull_rows: List, user_row,
         now = datetime.now(timezone.utc)
     win_start = now - timedelta(hours=max(1, window_hours))
 
+    self_count = 0
     for r in pull_rows:
         ip = r["ip"]
+        # 自有设备(自有IP/反代IP/自有UA)不参与评分: 只计入 self_ratio, 其余信号全跳过
+        if ipc.is_self_ip(ip) or uac.is_self(r["ua"]):
+            self_count += 1
+            continue
         ips.add(ip)
         if r["ua"]:
             uas.add(r["ua"])
@@ -165,10 +170,11 @@ def build_features(token: str, pull_rows: List, user_row,
         c = sum(math.cos(a) for a in angs) / len(angs)
         s = sum(math.sin(a) for a in angs) / len(angs)
         f.time_concentration = math.hypot(c, s)
+    real = max(f.pull_count - self_count, 1)   # 非自有拉取数(其余比率的分母)
     f.asn_type_counts = type_counts
-    f.hosting_ratio = type_counts.get("hosting", 0) / n
-    f.self_ratio = type_counts.get("self", 0) / n
-    f.tool_ua_ratio = tool / n
+    f.hosting_ratio = type_counts.get("hosting", 0) / real
+    f.self_ratio = self_count / n               # 自有设备占比(供排除层)
+    f.tool_ua_ratio = tool / real
     f.has_client_ua = client > 0
 
     times.sort()

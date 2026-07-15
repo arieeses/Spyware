@@ -77,7 +77,7 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
     if (on("self_exclude_ratio") and not f.blacklist_hit
             and f.pull_count > 0 and f.self_ratio >= th.self_exclude_ratio):
         return RiskResult(f.token, 0.0, "正常", excluded=True,
-                          note="自有基础设施IP拉取(subconverter/监控/节点), 已排除",
+                          note="自有设备拉取(自有IP/自有UA/反代中转: subconverter/监控/节点), 已排除",
                           **_display(f))
 
     # 0. 命中黑名单(强, 直接判高危)
