@@ -157,7 +157,8 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
     # 命中特征库(手工登记的 IP/UA/ASN/邮箱): 强信号
     if on("feature_lib") and f.feature_hit:
         signals.append(Signal("命中特征库", w.feature_lib,
-            f.feature_reason or "命中特征库", tag="特征命中"))
+            f"命中特征库: {f.feature_reason}" if f.feature_reason else "命中特征库",
+            tag="特征命中"))
 
     # 内鬼库分维度匹配(每个独立开关)
     if on("insider_ip") and f.ins_ip:

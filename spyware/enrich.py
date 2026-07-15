@@ -206,34 +206,43 @@ class FeatureLib:
         return cls(_rows=rows)
 
     def match(self, ips, uas, email, asndb=None) -> str:
-        """返回命中原因(空串=未命中)。"""
+        """返回命中的具体特征(逗号分隔, 列出全部命中项; 空串=未命中)。"""
         if self.empty:
             return ""
+        hits = []
+
+        def add(lab):
+            if lab not in hits:
+                hits.append(lab)
+
         for ip in ips or ():
             try:
                 addr = ipaddress.ip_address(ip)
             except ValueError:
                 continue
-            if any(addr in n for n in self.ip_nets):
-                return f"IP {ip} 命中特征库"
+            for n in self.ip_nets:
+                if addr in n:
+                    add(f"IP {ip}" if n.num_addresses == 1 else f"IP段 {n}")
             if self.asns and asndb is not None:
                 asn, _ = asndb.lookup(ip)
                 if asn in self.asns:
-                    return f"AS{asn} 命中特征库"
+                    add(f"AS{asn}")
         for ua in uas or ():
             for p in self.ua_pats:
                 try:
-                    if re.search(p, ua or "", re.IGNORECASE):
-                        return "UA 命中特征库"
+                    hit = bool(re.search(p, ua or "", re.IGNORECASE))
                 except re.error:
-                    if p.lower() in (ua or "").lower():
-                        return "UA 命中特征库"
+                    hit = p.lower() in (ua or "").lower()
+                if hit:
+                    add(f"UA {p}")
         if email:
             el = email.lower()
             for e in self.emails:
                 if e in el:
-                    return "邮箱命中特征库"
-        return ""
+                    add(f"邮箱 {e}")
+        if len(hits) > 8:
+            hits = hits[:8] + [f"…等{len(hits)}项"]
+        return ", ".join(hits)
 
 
 class InsiderMatcher:

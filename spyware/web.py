@@ -293,7 +293,7 @@ def _user_detail(store, tok: str) -> dict:
         "expired": exp,
         "banned": (user["banned"] if user and "banned" in user.keys() else 0),
         "traffic": _human_bytes(r.traffic_bytes), "score": r.score, "level": r.level,
-        "signals": [s.name for s in r.signals],
+        "signals": [(s.detail if s.name == "命中特征库" and s.detail else s.name) for s in r.signals],
         "pull_count": r.pull_count, "distinct_ips": r.distinct_ips,
         "distinct_uas": r.distinct_uas, "online_ips": r.online_ips,
         "ip_shared_users": r.ip_shared_users,
