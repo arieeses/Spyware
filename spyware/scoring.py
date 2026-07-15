@@ -107,11 +107,13 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
         signals.append(Signal("机器规整拉取", w.pull_regularity,
             f"拉取间隔变异系数 {f.interval_cv:.2f} 偏低, 呈自动化定时特征", tag="自动化"))
 
-    # 5. 流量背离(拉取活跃却零流量, 抗伪装)
-    if (on("traffic_divergence") and f.pull_count >= th.divergence_min_pulls
-            and f.traffic_bytes <= th.divergence_max_bytes):
+    # 5. 流量背离(近三月每天都在用, 但每天上/下行峰值都极小 → 只探节点不真用)
+    if (on("traffic_divergence") and f.active_days90 >= th.divergence_active_days
+            and f.maxup_day < th.divergence_day_up_bytes
+            and f.maxdown_day < th.divergence_day_down_bytes):
         signals.append(Signal("流量背离", w.traffic_divergence,
-            f"拉取 {f.pull_count} 次却仅用 {f.traffic_bytes / 1048576:.1f}MB 流量, 只拿节点不使用",
+            f"近三月 {f.active_days90} 天每天都在用, 但单日上/下行峰值仅 "
+            f"{f.maxup_day / 1048576:.1f}/{f.maxdown_day / 1048576:.1f}MB, 只探节点不真用",
             tag="流量背离"))
 
     # 6. 注册→拉取轨迹(新号侦察)

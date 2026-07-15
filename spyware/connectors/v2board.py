@@ -143,6 +143,7 @@ class V2BoardConnector:
         finally:
             conn.close()
         store.refresh_traffic30(panel, since30)
+        store.refresh_daily_stats(panel, since)   # 近90天活跃天数+单日峰值(供流量背离)
         return n
 
     _ORDER_STATUS = {0: "待支付", 1: "开通中", 2: "已取消", 3: "已完成", 4: "已折抵"}

@@ -69,9 +69,11 @@ class Thresholds:
     level_high: float = 75.0
     level_mid: float = 50.0
     level_low: float = 30.0
-    # 流量背离: 拉取够活跃 且 流量低于下限
-    divergence_min_pulls: int = 10
-    divergence_max_bytes: int = 50 * 1024 * 1024  # 50MB
+    # 流量背离: 近三个月「每天都在用」但每天上/下行都极小(只探节点不真用)
+    divergence_active_days: int = 60                   # 近90天里至少这么多天有流量(≈每天都在用)
+    divergence_day_up_bytes: int = 5 * 1024 * 1024     # 每日上行峰值上限 5MB
+    divergence_day_down_bytes: int = 5 * 1024 * 1024   # 每日下行峰值上限 5MB
+    divergence_max_bytes: int = 50 * 1024 * 1024       # 50MB(累计流量上限, 供「注册即侦察」复用)
     # 拉取规整: 间隔变异系数(CV)低于此判为机器
     regular_cv: float = 0.35
     regular_min_pulls: int = 6

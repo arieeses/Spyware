@@ -200,6 +200,9 @@ _MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN down30 INTEGER DEFAULT 0",
     "ALTER TABLE scores ADD COLUMN main_ip TEXT",
     "ALTER TABLE insiders ADD COLUMN tags TEXT",
+    "ALTER TABLE users ADD COLUMN active_days90 INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN maxup_day INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN maxdown_day INTEGER DEFAULT 0",
 ]
 
 
@@ -665,6 +668,18 @@ class Store:
             "up30=COALESCE((SELECT SUM(u) FROM traffic_daily t WHERE t.token=users.token AND t.day>=?),0), "
             "down30=COALESCE((SELECT SUM(d) FROM traffic_daily t WHERE t.token=users.token AND t.day>=?),0) "
             "WHERE panel=?", (since30, since30, panel))
+        self.conn.commit()
+
+    def refresh_daily_stats(self, panel: str, since90: int) -> None:
+        """从本地每日流量重算近90天: 活跃天数(有流量的天) + 单日上/下行峰值, 写回 users。
+        供「流量背离」判断: 每天都在用(活跃天数多)但每天上下行峰值都很小。"""
+        self.conn.execute(
+            "UPDATE users SET "
+            "active_days90=COALESCE((SELECT COUNT(*) FROM traffic_daily t "
+            "  WHERE t.token=users.token AND t.day>=? AND (t.u>0 OR t.d>0)),0), "
+            "maxup_day=COALESCE((SELECT MAX(t.u) FROM traffic_daily t WHERE t.token=users.token AND t.day>=?),0), "
+            "maxdown_day=COALESCE((SELECT MAX(t.d) FROM traffic_daily t WHERE t.token=users.token AND t.day>=?),0) "
+            "WHERE panel=?", (since90, since90, since90, panel))
         self.conn.commit()
 
     def traffic_daily_for(self, token: str):

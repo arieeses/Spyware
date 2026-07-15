@@ -28,6 +28,9 @@ class TokenFeatures:
     time_days: int = 0            # 拉取覆盖的不同天数
     up30: int = 0                 # 近30天上行字节
     down30: int = 0               # 近30天下行字节
+    active_days90: int = 0        # 近90天有流量的天数(每天都在用)
+    maxup_day: int = 0            # 近90天单日上行峰值
+    maxdown_day: int = 0          # 近90天单日下行峰值
     feature_hit: bool = False     # 命中特征库(手工)
     feature_reason: str = ""
     # 内鬼库分维度命中
@@ -189,6 +192,9 @@ def build_features(token: str, pull_rows: List, user_row,
         f.traffic_bytes = user_row["traffic_bytes"] or 0
         f.up30 = (user_row["up30"] or 0) if "up30" in keys else 0
         f.down30 = (user_row["down30"] or 0) if "down30" in keys else 0
+        f.active_days90 = (user_row["active_days90"] or 0) if "active_days90" in keys else 0
+        f.maxup_day = (user_row["maxup_day"] or 0) if "maxup_day" in keys else 0
+        f.maxdown_day = (user_row["maxdown_day"] or 0) if "maxdown_day" in keys else 0
         f.created_at = _parse_dt(user_row["created_at"])
         f.expired_at = _parse_dt(user_row["expired_at"] if "expired_at" in keys else None)
         if f.created_at and times:
