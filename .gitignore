@@ -1,5 +1,5 @@
 # 运行时数据库(含用户/会话/管理员密码哈希, 勿提交)
-neigui.db
+spyware.db
 *.db
 
 # 本地配置(含 v2board 数据库凭据)
@@ -18,7 +18,7 @@ venv/
 .vscode/
 
 # agent 本地状态
-/opt/neigui-agent/
+/opt/spyware-agent/
 state.json
 
 # ASN 库(几十 MB, 运行时下载, 勿提交)
