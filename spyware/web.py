@@ -1250,14 +1250,16 @@ def render_insiders(store, msg="", err="") -> str:
         ips = _json.loads(r["ips"] or "[]")
         uas = _json.loads(r["uas"] or "[]")
         asns = _json.loads(r["asns"] or "[]")
-        trs += (f'<tr><td class="mono small">{esc(r["token"][:14])}</td>'
+        trs += (f'<tr style="cursor:pointer" onclick="userDetail(\'{esc(r["token"])}\')">'
+                f'<td class="mono small">{esc(r["token"][:14])}</td>'
                 f'<td class="small">{esc(r["email"] or "-")}</td>'
                 f'<td class="small">{esc(r["panel"] or "-")}</td>'
                 f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
                 f'<td class="small dim">{esc(", ".join("AS" + str(a) for a in asns[:4]))}</td>'
                 f'<td class="small dim">{len(uas)} 个</td>'
                 f'<td class="small dim">{esc((r["added_at"] or "")[:16])}</td>'
-                f'<td><form method="post" action="/insiders/remove" style="margin:0">'
+                f'<td><form method="post" action="/insiders/remove" style="margin:0" '
+                f'onclick="event.stopPropagation()">'
                 f'<input type="hidden" name="token" value="{esc(r["token"])}">'
                 f'<button class="btn sm ghost">移出</button></form></td></tr>')
     if not trs:
@@ -1269,9 +1271,12 @@ def render_insiders(store, msg="", err="") -> str:
         <div style="display:flex;gap:8px">
           <button class="btn sm ghost" onclick="_copyList(_INS_EMAILS,this)">复制邮箱 ({len(all_emails)})</button>
           <button class="btn sm ghost" onclick="_copyList(_INS_IPS,this)">复制IP ({len(all_ips)})</button>
+          <form method="post" action="/insiders/to-featlib" style="margin:0"
+                onsubmit="return confirm('把全部内鬼的 IP/邮箱/UA 导入特征库(自动去重)? 注意 ASN 不导入, 以免整机房误伤')">
+            <button class="btn sm">导入特征到特征库</button></form>
         </div>
       </div>
-      <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>, 但它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。点「移出」可还原回风险名单。</div>
+      <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>(但在名单里<b>搜索仍可找到并标注「内鬼」</b>), 它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。<b>点某行看详情</b>, 点「移出」还原回名单。</div>
       <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js};</script>
       {_COPYLIST_JS}
       <div class="tablewrap"><table class="grid">
@@ -1489,6 +1494,58 @@ def render_entities(store: Store, kind: str) -> str:
     </div>"""
 
 
+# 用户详情 / 同IP / 流量 三个弹窗: 放进全局页壳, 所有页面(风险名单/内鬼库)都能调 userDetail()
+_DETAIL_MODALS = """
+    <div class="modal-bg" id="sameIpModal"><div class="modal" style="width:min(520px,94vw);position:relative;overflow:hidden">
+      <button class="modalx" type="button" onclick="closeM('sameIpModal')" aria-label="关闭">×</button>
+      <h4 style="margin:0 0 10px" id="sameIpTitle">同 IP 账号</h4>
+      <div id="sameIpBody" class="udetail modalscroll"><div class="dim">加载中…</div></div>
+    </div></div>
+    <div class="modal-bg" id="userModal"><div class="modal" style="width:min(720px,95vw);position:relative;overflow:hidden">
+      <button class="modalx" type="button" onclick="closeM('userModal')" aria-label="关闭">×</button>
+      <div id="userBody" class="udetail modalscroll"><div class="dim">加载中…</div></div>
+    </div></div>
+    <div class="modal-bg" id="trafficModal"><div class="modal" style="width:min(640px,95vw);position:relative;overflow:hidden">
+      <button class="modalx" type="button" onclick="closeM('trafficModal')" aria-label="关闭">×</button>
+      <h4 style="margin:0 0 10px">流量记录</h4>
+      <div id="trafficBody" class="modalscroll"><div class="dim">加载中…</div></div>
+    </div></div>"""
+
+
+def _render_insider_hits(store, search: str) -> str:
+    """搜索时: 命中搜索词的已确认内鬼(已移出名单)单独列出, 红色「内鬼」标注, 点行看详情。"""
+    import json as _json
+    s = (search or "").strip().lower()
+    if not s:
+        return ""
+    hits = []
+    for r in store.list_insiders():
+        ips = _json.loads(r["ips"] or "[]")
+        asns = _json.loads(r["asns"] or "[]")
+        hay = " ".join([r["token"] or "", r["email"] or "", r["panel"] or "",
+                        " ".join(ips), " ".join(_json.loads(r["uas"] or "[]")),
+                        " ".join("as" + str(a) for a in asns)]).lower()
+        if s in hay:
+            hits.append((r, ips, asns))
+    if not hits:
+        return ""
+    trs = ""
+    for r, ips, asns in hits:
+        trs += (f'<tr style="cursor:pointer" onclick="userDetail(\'{esc(r["token"])}\')">'
+                f'<td><span class="badge" style="background:#e5484d;color:#fff">内鬼</span></td>'
+                f'<td class="mono small dim">{esc(r["token"][:12])}</td>'
+                f'<td class="small">{esc(r["email"] or "-")}</td>'
+                f'<td class="small">{esc(r["panel"] or "-")}</td>'
+                f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
+                f'<td class="small dim">{esc(", ".join("AS" + str(a) for a in asns[:4]))}</td></tr>')
+    return (f'<div class="card" style="border-left:3px solid #e5484d;margin-bottom:12px">'
+            f'<div class="card-title" style="margin:0 0 8px">内鬼库命中 '
+            f'<span class="dim small" style="font-weight:400;margin-left:6px">共 {len(hits)} 个 · 已确认内鬼(已移出名单), 点行看详情</span></div>'
+            f'<div class="tablewrap"><table class="grid"><thead><tr>'
+            f'<th>标注</th><th>Token</th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th></tr></thead>'
+            f'<tbody>{trs}</tbody></table></div></div>')
+
+
 def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str = "",
                     size: str = "10", page: str = "1") -> str:
     if str(size) not in ("10", "50", "100", "150"):
@@ -1618,7 +1675,10 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
                         size if str(size) in ("10", "50", "100", "150") else "10",
                         pg, pages, ["10", "50", "100", "150"])
 
+    insider_hits = _render_insider_hits(store, search)   # 搜索命中的已确认内鬼(标注内鬼)
+
     return f"""
+    {insider_hits}
     <div class="card">
       <div style="display:flex;flex-wrap:wrap;gap:12px 8px;align-items:flex-start;margin-bottom:12px">
         <div style="flex:1 1 300px;min-width:0">
@@ -1653,20 +1713,6 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         </div>
         <div class="modal-actions"><button type="button" class="btn ghost" onclick="closeM('exportModal')">取消</button><button class="btn">导出</button></div>
       </form>
-    </div></div>
-    <div class="modal-bg" id="sameIpModal"><div class="modal" style="width:min(520px,94vw);position:relative;overflow:hidden">
-      <button class="modalx" type="button" onclick="closeM('sameIpModal')" aria-label="关闭">×</button>
-      <h4 style="margin:0 0 10px" id="sameIpTitle">同 IP 账号</h4>
-      <div id="sameIpBody" class="udetail modalscroll"><div class="dim">加载中…</div></div>
-    </div></div>
-    <div class="modal-bg" id="userModal"><div class="modal" style="width:min(720px,95vw);position:relative;overflow:hidden">
-      <button class="modalx" type="button" onclick="closeM('userModal')" aria-label="关闭">×</button>
-      <div id="userBody" class="udetail modalscroll"><div class="dim">加载中…</div></div>
-    </div></div>
-    <div class="modal-bg" id="trafficModal"><div class="modal" style="width:min(640px,95vw);position:relative;overflow:hidden">
-      <button class="modalx" type="button" onclick="closeM('trafficModal')" aria-label="关闭">×</button>
-      <h4 style="margin:0 0 10px">流量记录</h4>
-      <div id="trafficBody" class="modalscroll"><div class="dim">加载中…</div></div>
     </div></div>"""
 
 
@@ -2143,6 +2189,7 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     </div>
     {content}
   </div>
+  {_DETAIL_MODALS}
 <script>
   function openM(id){{document.getElementById(id).classList.add('open');}}
   function closeM(id){{document.getElementById(id).classList.remove('open');}}
@@ -2957,6 +3004,21 @@ class Handler(BaseHTTPRequestHandler):
                                       ips=ips, uas=uas, asns=list(asns), tags=tags)
                     store.delete_score(tok)   # 立即从名单移除, 不等后台重算
                 self._back(); return
+            if path == "/insiders/to-featlib":
+                items = []
+                for r in store.list_insiders():
+                    for ip in json.loads(r["ips"] or "[]"):
+                        items.append(("ip", ip, "内鬼库导入"))
+                    for ua in json.loads(r["uas"] or "[]"):
+                        if ua:
+                            items.append(("ua", "^" + re.escape(ua) + "$", "内鬼库导入"))
+                    if r["email"]:
+                        items.append(("email", r["email"], "内鬼库导入"))
+                    # ASN 不导入: 整机房(如 AS16509=AWS)会误伤所有同机房用户; insider_asn 信号已按合理权重覆盖
+                added = store.add_signatures_bulk(items) if items else 0
+                self._to("/featlib?msg=" + quote(
+                    f"从内鬼库导入 {added} 条新特征(IP/邮箱/UA, 去重跳过 {len(items) - added} 条; ASN 未导入)"))
+                return
             if path == "/insiders/remove":
                 tok = form.get("token", "").strip()
                 store.remove_insider(tok)
