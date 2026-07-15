@@ -1367,16 +1367,15 @@ def render_insiders(store, msg="", err="") -> str:
         uas = _json.loads(r["uas"] or "[]")
         asns = _json.loads(r["asns"] or "[]")
         trs += (f'<tr style="cursor:pointer" onclick="userDetail(\'{esc(r["token"])}\')">'
-                f'<td class="mono small">{esc(r["token"][:14])}</td>'
+                f'<td style="white-space:nowrap"><button class="btn sm ghost" type="button" '
+                f'onclick="event.stopPropagation();impFeat(\'{esc(r["token"])}\')">导入特征库</button></td>'
                 f'<td class="small">{esc(r["email"] or "-")}</td>'
                 f'<td class="small">{esc(r["panel"] or "-")}</td>'
                 f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
                 f'<td class="small dim">{esc(", ".join("AS" + str(a) for a in asns[:4]))}</td>'
                 f'<td class="small dim">{len(uas)} 个</td>'
                 f'<td class="small dim">{esc((r["added_at"] or "")[:16])}</td>'
-                f'<td style="white-space:nowrap">'
-                f'<button class="btn sm ghost" type="button" onclick="event.stopPropagation();impFeat(\'{esc(r["token"])}\')">导入</button> '
-                f'<form method="post" action="/insiders/remove" style="margin:0;display:inline" '
+                f'<td><form method="post" action="/insiders/remove" style="margin:0" '
                 f'onclick="event.stopPropagation()">'
                 f'<input type="hidden" name="token" value="{esc(r["token"])}">'
                 f'<button class="btn sm ghost">移出</button></form></td></tr>')
@@ -1396,7 +1395,7 @@ def render_insiders(store, msg="", err="") -> str:
       <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js}, _INS_FEAT={feat_js}, _INS_FEAT_ALL={agg_js};</script>
       {_COPYLIST_JS}{_IMPFEAT_JS}
       <div class="tablewrap"><table class="grid">
-        <thead><tr><th>Token</th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
+        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
     </div>
