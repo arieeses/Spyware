@@ -1012,24 +1012,52 @@ def render_rules(store, msg="", err="") -> str:
         f'<td><input type="number" step="any" name="t_{k}" value="{v}" {_RNUM}></td>'
         f'<td>{_rule_toggle(k, off)}</td></tr>' for k, v in th.items())
     return f"""{_card_alert(msg, err)}
-    <form method="post" action="/rules/save">
     <div class="card">
-      <div class="card-title">信号权重(命中程度 × 权重 = 得分)
-        <button class="btn" style="margin-left:auto">保存全部</button></div>
-      <table class="grid"><thead><tr><th>信号</th><th>说明</th><th>权重</th><th>启用</th></tr></thead><tbody>{wl}</tbody></table>
-      <div class="dim small" style="margin-top:10px">直接改数值或开关, 点「保存全部」即生效(无需重启, 也不用改 config.py)。</div>
-    </div>
-    <div class="card">
-      <div class="card-title">阈值参数</div>
-      <table class="grid"><thead><tr><th>参数</th><th>值</th><th>启用</th></tr></thead><tbody>{tl}</tbody></table>
-      <div style="margin-top:14px;display:flex;gap:8px;align-items:center">
-        <button class="btn">保存全部</button>
-        <button class="btn ghost" formaction="/rules/reset" formnovalidate
-                onclick="return confirm('恢复为代码内置默认值?')">恢复默认</button>
-        <span class="dim small">「自有IP排除」开关关闭即停用排除层; 各信号开关控制是否参与评分。</span>
+      <div class="tabs">
+        <a class="tab active" id="rtab_w" onclick="rTab(1)">信号权重</a>
+        <a class="tab" id="rtab_t" onclick="rTab(0)">阈值参数</a>
       </div>
-    </div>
-    </form>"""
+      <form method="post" action="/rules/save">
+        <div id="rw_weights">
+          <div class="dim small" style="margin:4px 0 10px">命中程度 × 权重 = 得分。直接改数值或开关, 点「保存全部」即生效。</div>
+          <table class="grid" id="tbl_w"><thead><tr><th>信号</th><th>说明</th><th>权重</th><th>启用</th></tr></thead><tbody>{wl}</tbody></table>
+          <div class="pager" id="pg_w"></div>
+        </div>
+        <div id="rw_thresh" style="display:none">
+          <div class="dim small" style="margin:4px 0 10px">阈值参数; 「自有IP排除」开关关闭即停用排除层。</div>
+          <table class="grid" id="tbl_t"><thead><tr><th>参数</th><th>值</th><th>启用</th></tr></thead><tbody>{tl}</tbody></table>
+          <div class="pager" id="pg_t"></div>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:8px;align-items:center">
+          <button class="btn">保存全部</button>
+          <button class="btn ghost" formaction="/rules/reset" formnovalidate
+                  onclick="return confirm('恢复为代码内置默认值?')">恢复默认</button>
+        </div>
+      </form>
+    </div>""" + _RULES_JS
+
+
+_RULES_JS = """
+<script>
+function rTab(w){
+  document.getElementById('rw_weights').style.display = w ? '' : 'none';
+  document.getElementById('rw_thresh').style.display = w ? 'none' : '';
+  document.getElementById('rtab_w').className = 'tab' + (w ? ' active' : '');
+  document.getElementById('rtab_t').className = 'tab' + (w ? '' : ' active');
+}
+function rPage(tbl, pg){
+  var per = 10, tb = document.querySelector('#'+tbl+' tbody'), rows = tb.rows, n = rows.length;
+  var pages = Math.max(1, Math.ceil(n/per));
+  pg = Math.min(Math.max(1, pg), pages);
+  for (var i=0;i<n;i++) rows[i].style.display = (i>=(pg-1)*per && i<pg*per) ? '' : 'none';
+  var pgid = tbl=='tbl_w' ? 'pg_w' : 'pg_t', h='';
+  h += '<a class="pg'+(pg<=1?' dis':'')+'" onclick="rPage(\\''+tbl+'\\','+(pg-1)+')">‹</a>';
+  for (var p=1;p<=pages;p++) h += '<a class="pg'+(p==pg?' cur':'')+'" onclick="rPage(\\''+tbl+'\\','+p+')">'+p+'</a>';
+  h += '<a class="pg'+(pg>=pages?' dis':'')+'" onclick="rPage(\\''+tbl+'\\','+(pg+1)+')">›</a>';
+  document.getElementById(pgid).innerHTML = h;
+}
+rPage('tbl_w',1); rPage('tbl_t',1); rTab(1);
+</script>"""
 
 
 def _read_file(path: str) -> str:
