@@ -31,3 +31,6 @@ data/ip2asn-v4.tsv
 data/ip2asn-v6.tsv
 data/GeoLite2-ASN.mmdb
 data/*.mmdb
+
+# 设计文档不进仓库(本地/私有留存)
+docs/
