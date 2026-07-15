@@ -1152,8 +1152,16 @@ def _parse_sig_lines(text: str, kind: str = "auto"):
     return out
 
 
-def render_featurelib(store, msg="", err="") -> str:
-    rows = store.list_signatures()
+def render_featurelib(store, msg="", err="", search="") -> str:
+    all_rows = store.list_signatures()
+    total = len(all_rows)
+    s = (search or "").strip()
+    if s:
+        sl = s.lower()
+        rows = [r for r in all_rows if sl in (
+            f'{_SIG_KIND_CN.get(r["kind"], r["kind"])} {r["value"] or ""} {r["note"] or ""}').lower()]
+    else:
+        rows = all_rows
     trs = ""
     for r in rows:
         trs += (f'<tr><td>{esc(_SIG_KIND_CN.get(r["kind"], r["kind"]))}</td>'
@@ -1163,10 +1171,22 @@ def render_featurelib(store, msg="", err="") -> str:
                 f'<td><form method="post" action="/featlib/delete" onsubmit="return confirm(\'删除?\')" style="margin:0">'
                 f'<input type="hidden" name="id" value="{r["id"]}"><button class="btn sm danger">删除</button></form></td></tr>')
     if not trs:
-        trs = '<tr><td colspan="5" class="dim" style="padding:16px">还没登记特征, 用上面的表单添加</td></tr>'
+        trs = (f'<tr><td colspan="5" class="dim" style="padding:16px">没有匹配「{esc(s)}」的特征</td></tr>'
+               if s else '<tr><td colspan="5" class="dim" style="padding:16px">还没登记特征, 用上面的表单添加</td></tr>')
+    count_label = (f'共 {total} 条 · 匹配 {len(rows)} 条' if s else f'共 {total} 条')
+    searchbox = (
+        f'<form method="get" action="/featlib" style="margin-left:auto;display:flex;gap:6px">'
+        f'<input name="q" value="{esc(s)}" placeholder="搜索 类型/特征值/备注" '
+        f'style="width:220px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
+        f'<button class="btn sm">搜索</button>'
+        + ('<a class="btn sm ghost" href="/featlib">清除</a>' if s else '')
+        + '</form>')
     return f"""{_card_alert(msg, err)}
     <div class="card">
-      <div class="card-title">特征库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {len(rows)} 条</span></div>
+      <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+        <div class="card-title" style="margin:0">特征库 <span class="dim small" style="font-weight:400;margin-left:8px">{count_label}</span></div>
+        {searchbox}
+      </div>
       <div class="dim small" style="margin-bottom:10px">手工登记特征(IP/UA/ASN/邮箱), 任何用户命中即触发「命中特征库」信号(强, 权重可在风险规则页调)。与「内鬼库」独立: 这里是手工规则, 内鬼库是一键移入的账号。</div>
       <form method="post" action="/featlib/add" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <select name="kind" style="padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
@@ -2620,7 +2640,8 @@ class Handler(BaseHTTPRequestHandler):
                 content = render_whitelist(q.get("msg", [""])[0], q.get("err", [""])[0],
                                            q.get("tab", ["white"])[0])
             elif active == "featlib":
-                content = render_featurelib(store, q.get("msg", [""])[0], q.get("err", [""])[0])
+                content = render_featurelib(store, q.get("msg", [""])[0], q.get("err", [""])[0],
+                                            q.get("q", [""])[0])
             elif active == "insiders":
                 content = render_insiders(store, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "domains":
