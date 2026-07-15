@@ -112,7 +112,7 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
             and f.maxup_day < th.divergence_day_up_bytes
             and f.maxdown_day < th.divergence_day_down_bytes):
         signals.append(Signal("流量背离", w.traffic_divergence,
-            f"近三月 {f.active_days90} 天每天都在用, 但单日上/下行峰值仅 "
+            f"近三月实际使用 {f.active_days90} 天, 每天上/下行峰值仅 "
             f"{f.maxup_day / 1048576:.1f}/{f.maxdown_day / 1048576:.1f}MB, 只探节点不真用",
             tag="流量背离"))
 

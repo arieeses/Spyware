@@ -937,7 +937,7 @@ WEIGHT_CN = {
     "ua_tool": ("工具类UA", "用 curl/python/Go 等工具或空 UA 拉订阅"),
     "ua_spoof": ("UA伪造", "声称客户端 UA 却来自机房 ASN, 疑似伪造"),
     "pull_regularity": ("机器规整拉取", "拉取间隔过于规整, 呈自动化定时特征"),
-    "traffic_divergence": ("流量背离", "近三月每天都在用, 但每天上/下行都<5MB, 只探节点不真用"),
+    "traffic_divergence": ("流量背离", "近三月实际使用的每一天上/下行都<5MB(哪怕只用了几天), 只探节点不真用"),
     "reg_trajectory": ("注册即侦察", "注册后立即拉取且无流量, 疑似注册就为拿节点"),
     "multi_ua": ("多客户端UA", "一个 token 用了多个不同 UA, 疑似多人共享/工具轮换"),
     "ua_burst": ("短时多UA轮换", "短时窗口内秒级切换多个客户端UA, 真人不可能, 自动化探测铁证"),
@@ -962,7 +962,7 @@ WEIGHT_CN = {
 }
 THRESH_CN = {
     "level_high": "高风险阈值(分)", "level_mid": "中风险阈值(分)", "level_low": "低风险阈值(分)",
-    "divergence_active_days": "流量背离-近90天最少活跃天数", "divergence_day_up_bytes": "流量背离-每日上行上限(字节)",
+    "divergence_active_days": "流量背离-最少实际使用天数(达到即按实际天判)", "divergence_day_up_bytes": "流量背离-每日上行上限(字节)",
     "divergence_day_down_bytes": "流量背离-每日下行上限(字节)",
     "divergence_max_bytes": "注册即侦察-累计流量上限(字节)",
     "regular_cv": "规整判定-间隔变异系数上限", "regular_min_pulls": "规整判定-最少拉取次数",

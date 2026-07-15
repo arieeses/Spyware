@@ -69,8 +69,9 @@ class Thresholds:
     level_high: float = 75.0
     level_mid: float = 50.0
     level_low: float = 30.0
-    # 流量背离: 近三个月「每天都在用」但每天上/下行都极小(只探节点不真用)
-    divergence_active_days: int = 60                   # 近90天里至少这么多天有流量(≈每天都在用)
+    # 流量背离: 近三个月实际使用过的每一天上/下行都极小(只探节点不真用)。
+    # 不卡"活跃满多少天"——刚买只用了5~10天的也算, 只要那几天每天都<5MB。下限仅防只试用1~2天的误伤。
+    divergence_active_days: int = 5                    # 近90天里至少这么多天有流量, 才够样本判定
     divergence_day_up_bytes: int = 5 * 1024 * 1024     # 每日上行峰值上限 5MB
     divergence_day_down_bytes: int = 5 * 1024 * 1024   # 每日下行峰值上限 5MB
     divergence_max_bytes: int = 50 * 1024 * 1024       # 50MB(累计流量上限, 供「注册即侦察」复用)
