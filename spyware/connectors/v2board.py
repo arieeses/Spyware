@@ -60,6 +60,32 @@ class V2BoardConnector:
                     "group": "group_id", "created": "created_at", "expired": "expired_at",
                     "banned": "banned", "u": "u", "d": "d"}
 
+    def move_users_to_group(self, tokens, group_name: str):
+        """把 tokens 对应用户的权限组改成 group_name(按组名在本面板查组ID)。写操作。
+        返回 (moved, gid, err)。"""
+        if not tokens:
+            return (0, None, None)
+        prefix = self.cfg.get("prefix", "v2_")
+        c = {**self.COLS_DEFAULT, **(self.cfg.get("cols") or {})}
+        gtable = prefix + (self.cfg.get("group_table") or "server_group")
+        conn = self._connect(read_timeout=30)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT id FROM {gtable} WHERE name=%s LIMIT 1", (group_name,))
+                row = cur.fetchone()
+                if not row:
+                    return (0, None, f"未找到权限组 '{group_name}'(表 {gtable})")
+                gid = row["id"]
+                ph = ",".join(["%s"] * len(tokens))
+                cur.execute(
+                    f"UPDATE {prefix}user SET {c['group']}=%s WHERE {c['token']} IN ({ph})",
+                    (gid, *tokens))
+                moved = cur.rowcount
+            conn.commit()
+            return (moved, gid, None)
+        finally:
+            conn.close()
+
     def sync_users(self, store: Store, panel: str = None, paid_only: bool = False) -> int:
         """读 v2_user, upsert 到本地 users 表。流量 = u + d。panel=归属机场名。
         paid_only=True: 只同步购买过的(有套餐或有到期时间), 跳过从未购买的免费注册。"""

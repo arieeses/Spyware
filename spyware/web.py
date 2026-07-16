@@ -1326,6 +1326,7 @@ function _impTgl(a){
 def render_insiders(store, msg="", err="") -> str:
     import json as _json
     rows = store.list_insiders()
+    spy_group = store.get_kv("spy_group_name", "Lv.spy") or "Lv.spy"
     all_emails = sorted({(r["email"] or "").strip() for r in rows if (r["email"] or "").strip()})
     all_ips = sorted({ip for r in rows for ip in _json.loads(r["ips"] or "[]") if ip})
     emails_js = _json.dumps(all_emails, ensure_ascii=False)
@@ -1397,6 +1398,7 @@ def render_insiders(store, msg="", err="") -> str:
           <button class="btn sm ghost" onclick="_copyList(_INS_EMAILS,this)">复制邮箱 ({len(all_emails)})</button>
           <button class="btn sm ghost" onclick="_copyList(_INS_IPS,this)">复制IP ({len(all_ips)})</button>
           <button class="btn sm" type="button" onclick="impFeat(null)">导入特征到特征库</button>
+          <button class="btn sm" type="button" onclick="openM('spyGroupModal')">移入权限组</button>
         </div>
       </div>
       <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>(但在名单里<b>搜索仍可找到并标注「内鬼」</b>), 它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。<b>点某行看详情</b>, 每行「导入」可单独导入该号特征, 「移出」还原回名单。</div>
@@ -1414,6 +1416,21 @@ def render_insiders(store, msg="", err="") -> str:
         <div class="modal-actions">
           <button type="button" class="btn ghost" onclick="closeM('impFeatModal')">取消</button>
           <button class="btn">导入勾选项</button>
+        </div>
+      </form>
+    </div></div>
+    <div class="modal-bg" id="spyGroupModal"><div class="modal">
+      <h3>把内鬼移入 v2board 权限组</h3>
+      <div class="dim small">对内鬼库里每个内鬼, 到它<b>所属面板</b>的 v2board, 按下面的组名查到<b>该面板对应的组ID</b>, 把该用户的权限组改成这个组。<br><b style="color:#e5484d">⚠ 这会写入你的 v2board 生产数据库, 不能自动撤销。</b>请确保各面板都已建好同名权限组。</div>
+      <form method="post" action="/insiders/to-group"
+            onsubmit="return confirm('确认把全部内鬼在各自面板移入该权限组? 会写入 v2board 生产库, 不可自动撤销')">
+        <div style="margin:12px 0">
+          <label class="dim small">权限组名称(需在各面板都存在)</label><br>
+          <input name="group_name" value="{esc(spy_group)}" style="margin-top:4px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px;width:220px">
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" onclick="closeM('spyGroupModal')">取消</button>
+          <button class="btn danger">移入该组</button>
         </div>
       </form>
     </div></div>"""
@@ -3254,6 +3271,41 @@ class Handler(BaseHTTPRequestHandler):
                     msg += f", 机房关键词 +{_append_hosting_keywords([h.upper() for h in host_v])} 条"
                 self._to("/featlib?msg=" + quote(msg + "(已去重)"))
                 return
+            if path == "/insiders/to-group":
+                group_name = (form.get("group_name", "") or "").strip() or "Lv.spy"
+                store.set_kv("spy_group_name", group_name)
+                # 面板名 -> v2board source config
+                panel_cfg = {}
+                for s in store.list_sources():
+                    if s["type"] != "v2board" or not s["enabled"]:
+                        continue
+                    try:
+                        cfg = json.loads(s["config"] or "{}")
+                    except (ValueError, TypeError):
+                        continue
+                    panel_cfg[cfg.get("panel") or s["name"]] = cfg
+                by_panel = {}
+                for r in store.list_insiders():
+                    by_panel.setdefault(r["panel"] or "", []).append(r["token"])
+                from .connectors.v2board import V2BoardConnector
+                moved_total, errs = 0, []
+                for panel, toks in by_panel.items():
+                    cfg = panel_cfg.get(panel)
+                    if not cfg:
+                        errs.append(f"{panel or '(空面板)'}: 无匹配的启用面板")
+                        continue
+                    try:
+                        moved, _gid, err = V2BoardConnector(cfg).move_users_to_group(toks, group_name)
+                        if err:
+                            errs.append(f"{panel}: {err}")
+                        else:
+                            moved_total += moved
+                    except Exception as e:  # noqa: BLE001
+                        errs.append(f"{panel}: {e}")
+                msg = f"已把 {moved_total} 个内鬼移入「{group_name}」组"
+                if errs:
+                    msg += " · 未完成: " + "; ".join(errs[:6])
+                self._to("/insiders?msg=" + quote(msg)); return
             if path == "/insiders/remove":
                 tok = form.get("token", "").strip()
                 store.remove_insider(tok)
