@@ -1327,6 +1327,7 @@ def render_insiders(store, msg="", err="") -> str:
     import json as _json
     rows = store.list_insiders()
     spy_group = store.get_kv("spy_group_name", "Lv.spy") or "Lv.spy"
+    ptimes = store.insider_pull_times([r["token"] for r in rows])   # 首次/最后订阅拉取时间
     all_emails = sorted({(r["email"] or "").strip() for r in rows if (r["email"] or "").strip()})
     all_ips = sorted({ip for r in rows for ip in _json.loads(r["ips"] or "[]") if ip})
     emails_js = _json.dumps(all_emails, ensure_ascii=False)
@@ -1381,7 +1382,8 @@ def render_insiders(store, msg="", err="") -> str:
                 f'<td class="small">{esc(r["email"] or "-")}</td>'
                 f'<td class="small">{esc(r["panel"] or "-")}</td>'
                 f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
-                f'<td class="small dim">{esc(", ".join("AS" + str(a) for a in asns[:4]))}</td>'
+                f'<td class="small dim">{esc((ptimes.get(r["token"], (None, None))[0] or "-")[:16].replace("T", " "))}</td>'
+                f'<td class="small dim">{esc((ptimes.get(r["token"], (None, None))[1] or "-")[:16].replace("T", " "))}</td>'
                 f'<td class="small dim">{len(uas)} 个</td>'
                 f'<td class="small dim">{esc((r["added_at"] or "")[:16])}</td>'
                 f'<td><form method="post" action="/insiders/remove" style="margin:0" '
@@ -1389,7 +1391,7 @@ def render_insiders(store, msg="", err="") -> str:
                 f'<input type="hidden" name="token" value="{esc(r["token"])}">'
                 f'<button class="btn sm ghost">移出</button></form></td></tr>')
     if not trs:
-        trs = '<tr><td colspan="8" class="dim" style="padding:16px">还没有内鬼, 在风险名单里点某行「移入内鬼」</td></tr>'
+        trs = '<tr><td colspan="9" class="dim" style="padding:16px">还没有内鬼, 在风险名单里点某行「移入内鬼」</td></tr>'
     return f"""{_card_alert(msg, err)}
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -1405,7 +1407,7 @@ def render_insiders(store, msg="", err="") -> str:
       <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js}, _INS_FEAT={feat_js}, _INS_FEAT_ALL={agg_js};</script>
       {_COPYLIST_JS}{_IMPFEAT_JS}
       <div class="tablewrap"><table class="grid">
-        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
+        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>IP</th><th>首次拉取</th><th>最后在线</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
     </div>

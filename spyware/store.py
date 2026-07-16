@@ -622,6 +622,18 @@ class Store:
     def list_insiders(self):
         return self.conn.execute("SELECT * FROM insiders ORDER BY added_at DESC").fetchall()
 
+    def insider_pull_times(self, tokens):
+        """批量取每个 token 的首次/最后订阅拉取时间。返回 {token: (first_ts, last_ts)}。"""
+        if not tokens:
+            return {}
+        ph = ",".join("?" * len(tokens))
+        out = {}
+        for r in self.conn.execute(
+                f"SELECT token, MIN(ts) AS first_ts, MAX(ts) AS last_ts FROM pulls "
+                f"WHERE token IN ({ph}) GROUP BY token", tuple(tokens)).fetchall():
+            out[r["token"]] = (r["first_ts"], r["last_ts"])
+        return out
+
     def insider_tokens(self) -> set:
         return {r["token"] for r in self.conn.execute("SELECT token FROM insiders").fetchall()}
 
