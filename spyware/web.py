@@ -200,6 +200,12 @@ def _humanize(dt) -> str:
     return f"{int(sec // 31536000)} 年前"
 
 
+def _ago_cell(iso_str, cls="small dim") -> str:
+    """相对时间单元格, 带 data-sort=epoch 供按时间排序。"""
+    dt = _iso_dt(iso_str)
+    return f'<td class="{cls}" data-sort="{int(dt.timestamp()) if dt else 0}">{_humanize(dt)}</td>'
+
+
 def _source_detail(src) -> str:
     cfg = json.loads(src["config"] or "{}")
     if src["type"] == "logfile":
@@ -249,7 +255,7 @@ RISK_COLS = [("uid", "用户ID"), ("email", "邮箱"), ("panel", "机场"), ("to
              ("ips", "IP数"), ("online", "在线IP"), ("uas", "UA数"), ("shared", "共用账号"),
              ("sameip", "同IP"), ("pull", "拉取"), ("score", "风险分"), ("level", "风险等级"),
              ("tags", "风险标签"), ("created", "注册时间"), ("expired", "到期时间"), ("last", "最新拉取订阅")]
-_NUM_COLS = {"uid", "ips", "online", "uas", "shared", "pull", "score"}
+_NUM_COLS = {"uid", "ips", "online", "uas", "shared", "pull", "score", "last"}
 _DASH = '<span class="dim">—</span>'
 
 
@@ -1396,8 +1402,8 @@ def render_insiders(store, msg="", err="") -> str:
                 f'<td class="small">{esc(r["email"] or "-")}</td>'
                 f'<td class="small">{esc(r["panel"] or "-")}</td>'
                 f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
-                f'<td class="small dim">{esc(_humanize(_iso_dt(ptimes.get(r["token"], (None, None))[1])))}</td>'
-                f'<td class="small dim">{len(uas)} 个</td>'
+                + _ago_cell(ptimes.get(r["token"], (None, None))[1])
+                + f'<td class="small dim">{len(uas)} 个</td>'
                 f'<td class="small dim">{esc((r["added_at"] or "")[:16])}</td>'
                 f'<td><form method="post" action="/insiders/remove" style="margin:0" '
                 f'onclick="event.stopPropagation()">'
@@ -1419,8 +1425,8 @@ def render_insiders(store, msg="", err="") -> str:
       <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>(但在名单里<b>搜索仍可找到并标注「内鬼」</b>), 它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。<b>点某行看详情</b>, 每行「导入」可单独导入该号特征, 「移出」还原回名单。</div>
       <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js}, _INS_FEAT={feat_js}, _INS_FEAT_ALL={agg_js};</script>
       {_COPYLIST_JS}{_IMPFEAT_JS}
-      <div class="tablewrap"><table class="grid">
-        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>IP</th><th>最新拉取订阅</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
+      <div class="tablewrap"><table class="grid sortable">
+        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>IP</th><th data-t="num">最新拉取订阅</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
     </div>
@@ -1880,7 +1886,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
             "tags": f'<td class="rtags">{tags_html or _DASH}</td>',
             "created": f'<td class="small dim">{reg}</td>',
             "expired": f'<td class="small" style="{"color:#e5484d" if expired else "color:#8a8a8a"}">{exp}</td>',
-            "last": f'<td class="small dim">{_humanize(r.last_pull)}</td>',
+            "last": f'<td class="small dim" data-sort="{int(r.last_pull.timestamp()) if r.last_pull else 0}">{_humanize(r.last_pull)}</td>',
         }
         action = (f'<td><form method="post" action="/insiders/add" style="margin:0" '
                   f'onclick="event.stopPropagation()" onsubmit="return confirm(\'移入内鬼库? 该账号将从名单移除, 但其特征继续参与检测\')">'
@@ -2559,15 +2565,15 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
     if(navigator.clipboard) navigator.clipboard.writeText(c);
     alert('卸载命令已复制, 在探针所在的面板服务器上执行:\\n\\n'+c+'\\n\\n然后在本页点该探针的「删除」移除数据源。');
   }}
-(function(){{
-  var t=document.getElementById('risk'); if(!t) return;
+document.querySelectorAll('table.sortable').forEach(function(t){{
   t.querySelectorAll('thead th').forEach(function(th,ci){{
     th.addEventListener('click',function(){{
-      var tb=t.tBodies[0], rows=Array.prototype.slice.call(tb.rows);
+      var tb=t.tBodies[0]; if(!tb) return;
+      var rows=Array.prototype.slice.call(tb.rows);
       var asc=th.dataset.asc!=='1'; th.dataset.asc=asc?'1':'0';
       var num=th.dataset.t==='num';
       rows.sort(function(a,b){{
-        var x=a.cells[ci], y=b.cells[ci];
+        var x=a.cells[ci], y=b.cells[ci]; if(!x||!y) return 0;
         var xv=x.dataset.sort||x.innerText, yv=y.dataset.sort||y.innerText;
         if(num){{return asc?(parseFloat(xv)||0)-(parseFloat(yv)||0):(parseFloat(yv)||0)-(parseFloat(xv)||0);}}
         return asc?(''+xv).localeCompare(yv):(''+yv).localeCompare(xv);
@@ -2575,7 +2581,7 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
       rows.forEach(function(r){{tb.appendChild(r);}});
     }});
   }});
-}})();
+}});
 </script>
 </body></html>"""
 
