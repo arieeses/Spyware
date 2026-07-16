@@ -60,6 +60,31 @@ class V2BoardConnector:
                     "group": "group_id", "created": "created_at", "expired": "expired_at",
                     "banned": "banned", "u": "u", "d": "d"}
 
+    def group_status(self, tokens, group_name: str):
+        """返回 {token: 是否在 group_name 组}(v2_user 里查不到的 token 不含在内)。读操作。
+        返回 (status_dict, err)。"""
+        if not tokens:
+            return {}, None
+        prefix = self.cfg.get("prefix", "v2_")
+        c = {**self.COLS_DEFAULT, **(self.cfg.get("cols") or {})}
+        gtable = prefix + (self.cfg.get("group_table") or "server_group")
+        conn = self._connect(read_timeout=30)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT id FROM {gtable} WHERE name=%s LIMIT 1", (group_name,))
+                row = cur.fetchone()
+                if not row:
+                    return {}, f"未找到权限组 '{group_name}'"
+                gid = row["id"]
+                ph = ",".join(["%s"] * len(tokens))
+                cur.execute(
+                    f"SELECT {c['token']} AS token, {c['group']} AS g FROM {prefix}user "
+                    f"WHERE {c['token']} IN ({ph})", tuple(tokens))
+                out = {r["token"]: (r["g"] == gid) for r in cur.fetchall()}
+            return out, None
+        finally:
+            conn.close()
+
     def move_users_to_group(self, tokens, group_name: str):
         """把 tokens 对应用户的权限组改成 group_name(按组名在本面板查组ID)。写操作。
         返回 (moved, gid, err)。"""

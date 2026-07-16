@@ -1347,6 +1347,11 @@ def render_insiders(store, msg="", err="") -> str:
     import json as _json
     rows = store.list_insiders()
     spy_group = store.get_kv("spy_group_name", "Lv.spy") or "Lv.spy"
+    try:
+        spy_status = _json.loads(store.get_kv("spy_status", "{}") or "{}")
+    except (ValueError, TypeError):
+        spy_status = {}
+    spy_status_at = store.get_kv("spy_status_at", "")
     ptimes = store.insider_pull_times([r["token"] for r in rows])   # 首次/最后订阅拉取时间
     all_emails = sorted({(r["email"] or "").strip() for r in rows if (r["email"] or "").strip()})
     all_ips = sorted({ip for r in rows for ip in _json.loads(r["ips"] or "[]") if ip})
@@ -1396,12 +1401,20 @@ def render_insiders(store, msg="", err="") -> str:
         ips = _json.loads(r["ips"] or "[]")
         uas = _json.loads(r["uas"] or "[]")
         asns = _json.loads(r["asns"] or "[]")
+        _st = spy_status.get(r["token"])
+        if _st is True:
+            stcell = '<td><span class="badge" style="background:#2f9e44;color:#fff">✓ 在组</span></td>'
+        elif _st is False:
+            stcell = '<td><span class="badge" style="background:#e5484d;color:#fff">✗ 不在</span></td>'
+        else:
+            stcell = '<td class="dim" title="未检查或该token在面板查不到账号">—</td>'
         trs += (f'<tr style="cursor:pointer" onclick="userDetail(\'{esc(r["token"])}\')">'
                 f'<td style="white-space:nowrap"><button class="btn sm ghost" type="button" '
                 f'onclick="event.stopPropagation();impFeat(\'{esc(r["token"])}\')">导入特征库</button></td>'
                 f'<td class="small">{esc(r["email"] or "-")}</td>'
                 f'<td class="small">{esc(r["panel"] or "-")}</td>'
-                f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
+                + stcell
+                + f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
                 + _ago_cell(ptimes.get(r["token"], (None, None))[1])
                 + f'<td class="small dim">{len(uas)} 个</td>'
                 f'<td class="small dim">{esc((r["added_at"] or "")[:16])}</td>'
@@ -1410,7 +1423,7 @@ def render_insiders(store, msg="", err="") -> str:
                 f'<input type="hidden" name="token" value="{esc(r["token"])}">'
                 f'<button class="btn sm ghost">移出</button></form></td></tr>')
     if not trs:
-        trs = '<tr><td colspan="8" class="dim" style="padding:16px">还没有内鬼, 在风险名单里点某行「移入内鬼」</td></tr>'
+        trs = '<tr><td colspan="9" class="dim" style="padding:16px">还没有内鬼, 在风险名单里点某行「移入内鬼」</td></tr>'
     return f"""{_card_alert(msg, err)}
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -1420,13 +1433,16 @@ def render_insiders(store, msg="", err="") -> str:
           <button class="btn sm ghost" onclick="_copyList(_INS_IPS,this)">复制IP ({len(all_ips)})</button>
           <button class="btn sm" type="button" onclick="impFeat(null)">导入特征到特征库</button>
           <button class="btn sm" type="button" onclick="openM('spyGroupModal')">移入权限组</button>
+          <form method="post" action="/insiders/check-group" style="margin:0">
+            <button class="btn sm ghost">检查{esc(spy_group)}分组</button></form>
         </div>
       </div>
+      {f'<div class="dim small" style="margin-top:6px">分组状态上次检查: {esc(spy_status_at)}</div>' if spy_status_at else ''}
       <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>(但在名单里<b>搜索仍可找到并标注「内鬼」</b>), 它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。<b>点某行看详情</b>, 每行「导入」可单独导入该号特征, 「移出」还原回名单。</div>
       <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js}, _INS_FEAT={feat_js}, _INS_FEAT_ALL={agg_js};</script>
       {_COPYLIST_JS}{_IMPFEAT_JS}
       <div class="tablewrap"><table class="grid sortable">
-        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>IP</th><th data-t="num">最新拉取订阅</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
+        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>{esc(spy_group)}</th><th>IP</th><th data-t="num">最新拉取订阅</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
     </div>
@@ -3316,6 +3332,46 @@ class Handler(BaseHTTPRequestHandler):
                     msg += f", 机房关键词 +{_append_hosting_keywords([h.upper() for h in host_v])} 条"
                 self._to("/featlib?msg=" + quote(msg + "(已去重)"))
                 return
+            if path == "/insiders/check-group":
+                group_name = store.get_kv("spy_group_name", "Lv.spy") or "Lv.spy"
+                panel_cfg = {}
+                for s in store.list_sources():
+                    if s["type"] != "v2board" or not s["enabled"]:
+                        continue
+                    try:
+                        cfg = json.loads(s["config"] or "{}")
+                    except (ValueError, TypeError):
+                        continue
+                    panel_cfg[cfg.get("panel") or s["name"]] = cfg
+                by_panel, no_panel = {}, []
+                for r in store.list_insiders():
+                    p = (r["panel"] or "").strip()
+                    (by_panel.setdefault(p, []).append(r["token"]) if p else no_panel.append(r["token"]))
+                from .connectors.v2board import V2BoardConnector
+                status, errs = {}, []
+                for panel, toks in by_panel.items():
+                    cfg = panel_cfg.get(panel)
+                    if not cfg:
+                        continue
+                    try:
+                        st, err = V2BoardConnector(cfg).group_status(toks, group_name)
+                        if err:
+                            errs.append(f"{panel}: {err}")
+                        status.update({t: bool(v) for t, v in st.items()})
+                    except Exception as e:  # noqa: BLE001
+                        errs.append(f"{panel}: {e}")
+                for panel, cfg in (panel_cfg.items() if no_panel else []):
+                    try:
+                        st, _err = V2BoardConnector(cfg).group_status(no_panel, group_name)
+                        status.update({t: bool(v) for t, v in st.items()})
+                    except Exception:  # noqa: BLE001
+                        pass
+                store.set_kv("spy_status", json.dumps(status))
+                store.set_kv("spy_status_at", datetime.now().isoformat(timespec="minutes"))
+                msg = f"已检查 {len(status)} 个内鬼的「{group_name}」分组状态"
+                if errs:
+                    msg += " · 问题: " + "; ".join(errs[:5])
+                self._to("/insiders?msg=" + quote(msg)); return
             if path == "/insiders/to-group":
                 group_name = (form.get("group_name", "") or "").strip() or "Lv.spy"
                 store.set_kv("spy_group_name", group_name)
