@@ -3284,25 +3284,40 @@ class Handler(BaseHTTPRequestHandler):
                     except (ValueError, TypeError):
                         continue
                     panel_cfg[cfg.get("panel") or s["name"]] = cfg
-                by_panel = {}
+                by_panel, no_panel = {}, []
                 for r in store.list_insiders():
-                    by_panel.setdefault(r["panel"] or "", []).append(r["token"])
+                    p = (r["panel"] or "").strip()
+                    if p:
+                        by_panel.setdefault(p, []).append(r["token"])
+                    else:
+                        no_panel.append(r["token"])   # 无账号/无面板: 稍后在所有面板里试
                 from .connectors.v2board import V2BoardConnector
                 moved_total, errs = 0, []
                 for panel, toks in by_panel.items():
                     cfg = panel_cfg.get(panel)
                     if not cfg:
-                        errs.append(f"{panel or '(空面板)'}: 无匹配的启用面板")
+                        errs.append(f"{panel}: 无匹配的启用面板")
                         continue
                     try:
                         moved, _gid, err = V2BoardConnector(cfg).move_users_to_group(toks, group_name)
                         if err:
                             errs.append(f"{panel}: {err}")
+                        moved_total += moved
+                    except Exception as e:  # noqa: BLE001
+                        errs.append(f"{panel}: {e}")
+                # 无面板(无账号)的内鬼: token 唯一, 在每个启用面板里试, 命中哪个就在哪改
+                for panel, cfg in (panel_cfg.items() if no_panel else []):
+                    try:
+                        moved, _gid, err = V2BoardConnector(cfg).move_users_to_group(no_panel, group_name)
+                        if err:
+                            errs.append(f"{panel}(无账号批): {err}")
                         else:
                             moved_total += moved
                     except Exception as e:  # noqa: BLE001
-                        errs.append(f"{panel}: {e}")
+                        errs.append(f"{panel}(无账号批): {e}")
                 msg = f"已把 {moved_total} 个内鬼移入「{group_name}」组"
+                if no_panel:
+                    msg += f"(含 {len(no_panel)} 个无面板内鬼在各面板逐一尝试)"
                 if errs:
                     msg += " · 未完成: " + "; ".join(errs[:6])
                 self._to("/insiders?msg=" + quote(msg)); return
