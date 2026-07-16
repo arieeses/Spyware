@@ -372,10 +372,21 @@ class Store:
         where, args = self._scores_where(level, panel, search, ip_tokens or set(), levels)
         return self.conn.execute(f"SELECT COUNT(*) FROM scores{where}", args).fetchone()[0]
 
+    _SORT_COLS = {"score": "score", "last": "last_pull", "ips": "distinct_ips",
+                  "online": "online_ips", "uas": "distinct_uas", "shared": "ip_shared_users",
+                  "pull": "pull_count", "created": "created_at", "expired": "expired_at",
+                  "uid": "user_id"}
+
     def list_scores(self, level="all", panel="all", search="", ip_tokens=None,
-                    limit=10, offset=0, levels=None):
+                    limit=10, offset=0, levels=None, sort="", sdir="desc"):
         where, args = self._scores_where(level, panel, search, ip_tokens or set(), levels)
-        q = f"SELECT * FROM scores{where} ORDER BY score DESC, token LIMIT ? OFFSET ?"
+        col = self._SORT_COLS.get(sort)
+        if col:
+            direction = "ASC" if sdir == "asc" else "DESC"
+            order = f"{col} {direction}, token"
+        else:
+            order = "score DESC, token"
+        q = f"SELECT * FROM scores{where} ORDER BY {order} LIMIT ? OFFSET ?"
         rows = self.conn.execute(q, args + [limit, offset]).fetchall()
         return [_row_to_result(r) for r in rows]
 

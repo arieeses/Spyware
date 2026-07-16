@@ -1797,10 +1797,16 @@ def _render_insider_hits(store, search: str) -> str:
             f'<tbody>{trs}</tbody></table></div></div>')
 
 
+_RISK_SORTABLE = {"uid", "ips", "online", "uas", "shared", "pull", "score", "last", "created", "expired"}
+
+
 def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str = "",
-                    size: str = "10", page: str = "1") -> str:
+                    size: str = "10", page: str = "1", sort: str = "", sdir: str = "desc") -> str:
     if str(size) not in ("10", "50", "100", "150"):
         size = "10"
+    if sort not in _RISK_SORTABLE:
+        sort = ""
+    sdir = "asc" if sdir == "asc" else "desc"
     counts = store.score_counts()      # 直接读物化评分, 与总用户数解耦
     excluded = counts["excluded"]
 
@@ -1812,6 +1818,8 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     else:
         ip_tokens = set()
 
+    sortq = (f"&sort={sort}&sdir={sdir}" if sort else "")   # 筛选/翻页时保持排序
+
     # 等级筛选按钮(自带数字): 全部/高/中/低/正常/排除
     pf = quote(panel_flt or "all")
     cnt = {"all": counts["total"], "高": counts["高"], "中": counts["中"],
@@ -1820,16 +1828,16 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     for name, key in [("全部", "all"), ("高风险", "高"), ("中风险", "中"),
                       ("低风险", "低"), ("正常", "正常"), ("排除", "排除")]:
         active = "active" if (flt or "all") == key else ""
-        tabs += (f'<a class="tab {active}" href="/risk?level={quote(key)}&panel={pf}">'
+        tabs += (f'<a class="tab {active}" href="/risk?level={quote(key)}&panel={pf}{sortq}">'
                  f'{name} <b>{cnt[key]}</b></a>')
 
     # 机场/前端面板 筛选
     lf = quote(flt or "all")
     panels = store.score_panels()
-    ptabs = f'<a class="tab {"active" if (panel_flt or "all")=="all" else ""}" href="/risk?level={lf}&panel=all">全部面板</a>'
+    ptabs = f'<a class="tab {"active" if (panel_flt or "all")=="all" else ""}" href="/risk?level={lf}&panel=all{sortq}">全部面板</a>'
     for pn in panels:
         active = "active" if panel_flt == pn else ""
-        ptabs += f'<a class="tab {active}" href="/risk?level={lf}&panel={quote(pn)}">{esc(pn)}</a>'
+        ptabs += f'<a class="tab {active}" href="/risk?level={lf}&panel={quote(pn)}{sortq}">{esc(pn)}</a>'
     panel_bar = f'<div class="tabs">{ptabs}</div>' if panels else ""
 
     # SQL 分页/筛选/搜索: 只取当前页的行, 不再全量载入内存
@@ -1837,7 +1845,8 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     psize, pg, pages, all_mode = _paginate(size, page, total, 10)
     page_rows = store.list_scores(flt, panel_flt, search, ip_tokens,
                                   limit=(total or 1) if all_mode else psize,
-                                  offset=0 if all_mode else (pg - 1) * psize)
+                                  offset=0 if all_mode else (pg - 1) * psize,
+                                  sort=sort, sdir=sdir)
 
     # 列显隐配置
     try:
@@ -1897,7 +1906,16 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     if not rows:
         rows = f'<tr><td colspan="{len(vis) + 1}" class="dim" style="padding:20px">暂无用户</td></tr>'
 
-    header = "".join(f"<th{_th_attr(k)}>{lb}</th>" for k, lb in vis) + "<th>操作</th>"
+    def _hcell(k, lb):
+        if k not in _RISK_SORTABLE:
+            return f"<th{_th_attr(k)}>{lb}</th>"
+        ndir = "asc" if (sort == k and sdir == "desc") else "desc"
+        arrow = (" ▼" if sdir == "desc" else " ▲") if sort == k else ""
+        href = (f"/risk?level={quote(flt or 'all')}&panel={quote(panel_flt or 'all')}"
+                f"&q={quote(search)}&size={quote(str(size))}&sort={k}&sdir={ndir}")
+        return (f'<th{_th_attr(k)} style="cursor:pointer">'
+                f'<a href="{href}" style="color:inherit;text-decoration:none">{lb}{arrow}</a></th>')
+    header = "".join(_hcell(k, lb) for k, lb in vis) + "<th>操作</th>"
 
     # 列显隐弹窗
     col_checks = "".join(
@@ -1917,12 +1935,15 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         f'<input type="hidden" name="level" value="{esc(flt or "all")}">'
         f'<input type="hidden" name="panel" value="{esc(panel_flt or "all")}">'
         f'<input type="hidden" name="size" value="{esc(size)}">'
+        f'<input type="hidden" name="sort" value="{esc(sort)}">'
+        f'<input type="hidden" name="sdir" value="{esc(sdir)}">'
         f'<input name="q" value="{esc(search)}" placeholder="搜索 token/邮箱/IP/UA/ASN" style="width:220px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
         f'<button class="btn sm">搜索</button>'
-        + (f'<a class="btn sm ghost" href="/risk?level={quote(flt or "all")}&panel={pf}">清除</a>' if search else '')
+        + (f'<a class="btn sm ghost" href="/risk?level={quote(flt or "all")}&panel={pf}{sortq}">清除</a>' if search else '')
         + '</form>')
 
-    pager = _pager_html("/risk", {"level": flt or "all", "panel": panel_flt or "all", "q": search},
+    pager = _pager_html("/risk", {"level": flt or "all", "panel": panel_flt or "all", "q": search,
+                                  "sort": sort, "sdir": sdir},
                         size if str(size) in ("10", "50", "100", "150") else "10",
                         pg, pages, ["10", "50", "100", "150"])
 
@@ -1945,7 +1966,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         </div>
       </div>
       <div class="tablewrap">
-      <table class="grid sortable" id="risk">
+      <table class="grid" id="risk">
         <thead><tr>{header}</tr></thead>
         <tbody>{rows}</tbody>
       </table></div>
@@ -2865,7 +2886,8 @@ class Handler(BaseHTTPRequestHandler):
             elif active == "risk":
                 content = render_risklist(store, q.get("level", ["all"])[0],
                                           q.get("panel", ["all"])[0], q.get("q", [""])[0],
-                                          q.get("size", ["10"])[0], q.get("page", ["1"])[0])
+                                          q.get("size", ["10"])[0], q.get("page", ["1"])[0],
+                                          q.get("sort", [""])[0], q.get("sdir", ["desc"])[0])
             elif active == "rules":
                 content = render_rules(store, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "whitelist":
