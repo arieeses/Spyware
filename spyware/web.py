@@ -1253,6 +1253,7 @@ def render_featurelib(store, msg="", err="", search="") -> str:
                  style="font-size:12px;max-width:230px" title="可多选文件, 或在文件夹里全选">
           <button class="btn ghost sm">导入文件</button>
         </form>
+        <a class="btn ghost sm" href="/featlib/export{('?q=' + quote(s)) if s else ''}">⬇ 导出CSV{('(匹配 ' + str(len(rows)) + ')') if s else ''}</a>
         <span class="dim small">导入/批量: 逐行自动识别 IP·CIDR / AS号 / @邮箱 / UA, 自动去重</span>
         <form method="post" action="/featlib/delete-all" style="margin:0 0 0 auto"
               onsubmit="return confirm('确定删除特征库全部特征? 此操作不可恢复!')">
@@ -2827,6 +2828,29 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/csv; charset=utf-8")
                 self.send_header("Content-Disposition", 'attachment; filename="insiders.csv"')
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
+            if path == "/featlib/export":
+                import csv as _csv
+                import io as _io
+                sq = (q.get("q", [""])[0] or "").strip().lower()
+                srows = store.list_signatures()
+                if sq:
+                    srows = [r for r in srows if sq in
+                             f'{_SIG_KIND_CN.get(r["kind"], r["kind"])} {r["value"] or ""} {r["note"] or ""}'.lower()]
+                buf = _io.StringIO()
+                wr = _csv.writer(buf)
+                wr.writerow(["类型", "特征值", "备注", "添加时间"])
+                for r in srows:
+                    wr.writerow([_SIG_KIND_CN.get(r["kind"], r["kind"]), r["value"] or "",
+                                 r["note"] or "", (r["created_at"] or "")[:19]])
+                data = ("﻿" + buf.getvalue()).encode("utf-8")   # BOM: Excel 正确识别中文
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", 'attachment; filename="featlib.csv"')
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
