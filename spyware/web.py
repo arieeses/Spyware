@@ -169,6 +169,16 @@ def _pull_count(store: Store) -> int:
     return store.conn.execute("SELECT COUNT(*) c FROM pulls").fetchone()["c"]
 
 
+def _iso_dt(s):
+    """ISO 字符串 → datetime(供 _humanize); 解析失败或空返回 None。"""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
 def _humanize(dt) -> str:
     if dt is None:
         return "-"
@@ -183,7 +193,11 @@ def _humanize(dt) -> str:
         return f"{int(sec // 60)} 分钟前"
     if sec < 86400:
         return f"{int(sec // 3600)} 小时前"
-    return f"{int(sec // 86400)} 天前"
+    if sec < 2592000:
+        return f"{int(sec // 86400)} 天前"
+    if sec < 31536000:
+        return f"{int(sec // 2592000)} 个月前"
+    return f"{int(sec // 31536000)} 年前"
 
 
 def _source_detail(src) -> str:
@@ -234,7 +248,7 @@ def _pager_html(path, base, size, page, pages, sizes):
 RISK_COLS = [("uid", "用户ID"), ("email", "邮箱"), ("panel", "机场"), ("token", "Token"),
              ("ips", "IP数"), ("online", "在线IP"), ("uas", "UA数"), ("shared", "共用账号"),
              ("sameip", "同IP"), ("pull", "拉取"), ("score", "风险分"), ("level", "风险等级"),
-             ("tags", "风险标签"), ("created", "注册时间"), ("expired", "到期时间"), ("last", "最后活跃")]
+             ("tags", "风险标签"), ("created", "注册时间"), ("expired", "到期时间"), ("last", "最新拉取订阅")]
 _NUM_COLS = {"uid", "ips", "online", "uas", "shared", "pull", "score"}
 _DASH = '<span class="dim">—</span>'
 
@@ -1382,8 +1396,7 @@ def render_insiders(store, msg="", err="") -> str:
                 f'<td class="small">{esc(r["email"] or "-")}</td>'
                 f'<td class="small">{esc(r["panel"] or "-")}</td>'
                 f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
-                f'<td class="small dim">{esc((ptimes.get(r["token"], (None, None))[0] or "-")[:16].replace("T", " "))}</td>'
-                f'<td class="small dim">{esc((ptimes.get(r["token"], (None, None))[1] or "-")[:16].replace("T", " "))}</td>'
+                f'<td class="small dim">{esc(_humanize(_iso_dt(ptimes.get(r["token"], (None, None))[1])))}</td>'
                 f'<td class="small dim">{len(uas)} 个</td>'
                 f'<td class="small dim">{esc((r["added_at"] or "")[:16])}</td>'
                 f'<td><form method="post" action="/insiders/remove" style="margin:0" '
@@ -1391,7 +1404,7 @@ def render_insiders(store, msg="", err="") -> str:
                 f'<input type="hidden" name="token" value="{esc(r["token"])}">'
                 f'<button class="btn sm ghost">移出</button></form></td></tr>')
     if not trs:
-        trs = '<tr><td colspan="9" class="dim" style="padding:16px">还没有内鬼, 在风险名单里点某行「移入内鬼」</td></tr>'
+        trs = '<tr><td colspan="8" class="dim" style="padding:16px">还没有内鬼, 在风险名单里点某行「移入内鬼」</td></tr>'
     return f"""{_card_alert(msg, err)}
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -1407,7 +1420,7 @@ def render_insiders(store, msg="", err="") -> str:
       <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js}, _INS_FEAT={feat_js}, _INS_FEAT_ALL={agg_js};</script>
       {_COPYLIST_JS}{_IMPFEAT_JS}
       <div class="tablewrap"><table class="grid">
-        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>IP</th><th>首次拉取</th><th>最后在线</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
+        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>IP</th><th>最新拉取订阅</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
     </div>
@@ -2751,7 +2764,7 @@ class Handler(BaseHTTPRequestHandler):
                 wr = _csv.writer(buf)
                 wr.writerow(["token", "邮箱", "用户ID", "面板", "风险分", "等级", "命中信号",
                              "IP", "ASN", "IP数", "在线IP", "UA数", "共用账号", "拉取次数",
-                             "已用流量", "注册时间", "到期时间", "最后活跃"])
+                             "已用流量", "注册时间", "到期时间", "最新拉取订阅"])
                 for r in rows:
                     ips = ipmap.get(r.token, [])
                     asns = sorted({f"AS{asndb.lookup(ip)[0]}" for ip in ips
