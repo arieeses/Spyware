@@ -1780,6 +1780,7 @@ def _render_insider_hits(store, search: str) -> str:
             hits.append((r, ips, asns))
     if not hits:
         return ""
+    ptimes = store.insider_pull_times([r["token"] for r, _, _ in hits])   # 最新拉取时间
     trs = ""
     for r, ips, asns in hits:
         trs += (f'<tr style="cursor:pointer" onclick="userDetail(\'{esc(r["token"])}\')">'
@@ -1788,12 +1789,13 @@ def _render_insider_hits(store, search: str) -> str:
                 f'<td class="small">{esc(r["email"] or "-")}</td>'
                 f'<td class="small">{esc(r["panel"] or "-")}</td>'
                 f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
-                f'<td class="small dim">{esc(", ".join("AS" + str(a) for a in asns[:4]))}</td></tr>')
+                f'<td class="small dim">{esc(", ".join("AS" + str(a) for a in asns[:4]))}</td>'
+                + _ago_cell(ptimes.get(r["token"], (None, None))[1]) + "</tr>")
     return (f'<div class="card" style="border-left:3px solid #e5484d;margin-bottom:12px">'
             f'<div class="card-title" style="margin:0 0 8px">内鬼库命中 '
             f'<span class="dim small" style="font-weight:400;margin-left:6px">共 {len(hits)} 个 · 已确认内鬼(已移出名单), 点行看详情</span></div>'
             f'<div class="tablewrap"><table class="grid"><thead><tr>'
-            f'<th>标注</th><th>Token</th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th></tr></thead>'
+            f'<th>标注</th><th>Token</th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th><th>最新拉取订阅</th></tr></thead>'
             f'<tbody>{trs}</tbody></table></div></div>')
 
 
