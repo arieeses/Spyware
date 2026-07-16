@@ -91,6 +91,12 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
         signals.append(Signal("机房ASN拉订阅", round(f.hosting_ratio * w.hosting_asn, 1),
             f"{f.hosting_ratio * 100:.0f}% 拉取来自机房/IDC(真人应为住宅/移动)", tag="机房IP"))
 
+    # 1b. 跨云机房(订阅同时来自多个云厂商 = 号被多云代理采集, 真人不可能)
+    if on("multi_cloud") and len(f.clouds) >= th.multi_cloud_min:
+        signals.append(Signal("跨云机房拉取", w.multi_cloud,
+            f"订阅同时来自 {len(f.clouds)} 个云厂商({'/'.join(f.clouds)}), 真人不会跨多云拉取",
+            tag="机房IP"))
+
     # 2. 工具/空 UA
     if on("ua_tool") and f.tool_ua_ratio > 0:
         signals.append(Signal("工具类UA", round(f.tool_ua_ratio * w.ua_tool, 1),

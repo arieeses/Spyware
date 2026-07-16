@@ -149,3 +149,27 @@ def is_hosting_org(desc: str) -> bool:
         return False
     d = desc.upper()
     return any(kw in d for kw in _hosting_keywords())
+
+
+# 主流公有云厂商 → 中文名(ASN 组织名关键词匹配)。用于「跨云机房」信号: 同一账号跨多个云 = 极可疑。
+_CLOUD_MAP = [
+    ("阿里云", ("ALIBABA", "ALICLOUD", "ALIYUN")),
+    ("AWS", ("AMAZON", "AWS")),
+    ("腾讯云", ("TENCENT",)),
+    ("UCloud", ("UCLOUD",)),
+    ("Google", ("GOOGLE",)),
+    ("Azure", ("AZURE", "MICROSOFT")),
+    ("Oracle", ("ORACLE",)),
+    ("华为云", ("HUAWEI",)),
+]
+
+
+def cloud_of(desc: str):
+    """ASN 组织名 → 云厂商中文名; 非主流云返回 None。"""
+    if not desc:
+        return None
+    d = desc.upper()
+    for name, kws in _CLOUD_MAP:
+        if any(k in d for k in kws):
+            return name
+    return None

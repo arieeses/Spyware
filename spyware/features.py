@@ -42,6 +42,7 @@ class TokenFeatures:
     ins_tag_sets: object = None   # 内鬼行为标签集(供 score_token 算行为相似)
     main_ip: Optional[str] = None  # 代表 IP(最近一次拉取), 供「同IP」下钻
     asn_type_counts: Dict[str, int] = field(default_factory=dict)
+    clouds: List[str] = field(default_factory=list)   # 命中的云厂商(阿里云/AWS/腾讯云/UCloud等)
     hosting_ratio: float = 0.0
     self_ratio: float = 0.0
     tool_ua_ratio: float = 0.0
@@ -171,6 +172,14 @@ def build_features(token: str, pull_rows: List, user_row,
         s = sum(math.sin(a) for a in angs) / len(angs)
         f.time_concentration = math.hypot(c, s)
     real = max(f.pull_count - self_count, 1)   # 非自有拉取数(其余比率的分母)
+    # 跨云机房: 该账号(非自有)IP 命中了哪些云厂商
+    from .asn import cloud_of
+    cl = set()
+    for ip in ips:
+        c = cloud_of(ipc.asn_info(ip)[1])
+        if c:
+            cl.add(c)
+    f.clouds = sorted(cl)
     f.asn_type_counts = type_counts
     f.hosting_ratio = type_counts.get("hosting", 0) / real
     f.self_ratio = self_count / n               # 自有设备占比(供排除层)

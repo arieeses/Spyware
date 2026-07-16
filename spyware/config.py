@@ -33,6 +33,7 @@ def _default_db_path() -> str:
 class Weights:
     """各信号满分贡献值。命中程度 × 权重 = 实际得分。"""
     hosting_asn: float = 25.0        # 机房ASN拉订阅
+    multi_cloud: float = 35.0        # 跨云机房(同时来自多个云厂商: 阿里云/AWS/腾讯云/UCloud等)
     ua_tool: float = 15.0            # 工具/空 UA
     ua_spoof: float = 20.0           # 客户端UA + 机房ASN(伪造)
     pull_regularity: float = 10.0    # 机器般规整拉取
@@ -65,6 +66,8 @@ class Weights:
 
 @dataclass
 class Thresholds:
+    # 跨云机房: 账号订阅同时来自这么多个不同云厂商即判(2=只要跨2个云就算)
+    multi_cloud_min: int = 2
     # 风险分档
     level_high: float = 75.0
     level_mid: float = 50.0

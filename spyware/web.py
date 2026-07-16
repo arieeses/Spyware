@@ -954,6 +954,7 @@ def render_controls(store: Store) -> str:
 WEIGHT_CN = {
     "blacklist_hit": ("命中黑名单", "IP/UA/ASN 黑名单命中, 直接判高危并隔离下发"),
     "hosting_asn": ("机房ASN拉订阅", "订阅来自机房/IDC IP(真人应为住宅/移动)"),
+    "multi_cloud": ("跨云机房拉取", "订阅同时来自多个云厂商(阿里云/AWS/腾讯云/UCloud/Google/Azure等), 真人不会跨云, 极可疑"),
     "ua_tool": ("工具类UA", "用 curl/python/Go 等工具或空 UA 拉订阅"),
     "ua_spoof": ("UA伪造", "声称客户端 UA 却来自机房 ASN, 疑似伪造"),
     "pull_regularity": ("机器规整拉取", "拉取间隔过于规整, 呈自动化定时特征"),
@@ -982,6 +983,7 @@ WEIGHT_CN = {
 }
 THRESH_CN = {
     "level_high": "高风险阈值(分)", "level_mid": "中风险阈值(分)", "level_low": "低风险阈值(分)",
+    "multi_cloud_min": "跨云机房-最少不同云厂商数(2=跨2云即判)",
     "divergence_active_days": "流量背离-最少实际使用天数(达到即按实际天判)", "divergence_day_up_bytes": "流量背离-每日上行上限(字节)",
     "divergence_day_down_bytes": "流量背离-每日下行上限(字节)",
     "divergence_max_bytes": "注册即侦察-累计流量上限(字节)",
