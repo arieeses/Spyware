@@ -2149,10 +2149,70 @@ def _update_card() -> str:
     </div>"""
 
 
+_COND_CN = {"email": "邮箱前缀", "ip": "IP", "ua": "UA", "asn": "机房ASN"}
+
+
+def _rule_preview(hist: dict, conds) -> int:
+    """按命中直方图估算某规则(conds 全命中)当前会命中多少账号。"""
+    cs = set(conds)
+    total = 0
+    for key, n in (hist or {}).items():
+        ks = set(key.split(",")) if key else set()
+        if cs <= ks:
+            total += n
+    return total
+
+
 def render_gateway(store, msg="", err="") -> str:
-    """网关联动 · Feed 独立页: 密钥 / 前缀自动入库开关 / 当前 feed 内容量 / 网关侧配置示例。"""
+    """网关联动 · Feed 独立页: 密钥 / 自动入库规则(可自定义组合) / feed 量 / 网关侧配置示例。"""
+    import json as _json
     feed_key = store.get_kv("gateway_feed_key", "") if store else ""
-    auto_pfx = (store.get_kv("auto_prefix_insider", "1") == "1") if store else True
+    rules = store.get_auto_insider_rules() if store else []
+    try:
+        hist = _json.loads(store.get_kv("feat_kind_hist", "") or "{}") if store else {}
+    except (ValueError, TypeError):
+        hist = {}
+    # 规则列表 HTML
+    if rules:
+        rows = []
+        for r in rules:
+            conds = r.get("conds") or []
+            rid = r.get("id") or "+".join(conds)
+            on = bool(r.get("on"))
+            sep = ' <span class="dim">且</span> '
+            chips = sep.join(f'<span class="chip">{esc(_COND_CN.get(c, c))}</span>' for c in conds)
+            hit = _rule_preview(hist, conds)
+            # 3.8 安全: 带引号/中文的 onsubmit 在 f-string 外拼好
+            if on:
+                toggle_guard = "return true"
+            else:
+                toggle_guard = ("return confirm('启用后下次重算会把命中此规则的 "
+                                + str(hit) + " 个账号移入内鬼库, 确认?')")
+            btn_cls = "" if on else "ghost"
+            btn_txt = "已启用" if on else "启用"
+            next_on = "0" if on else "1"
+            rows.append(f"""
+            <tr>
+              <td>{chips}</td>
+              <td class="dim small">命中 <b>{hit}</b> 个账号</td>
+              <td style="text-align:right;white-space:nowrap">
+                <form method="post" action="/gateway/rule-toggle" style="display:inline"
+                      onsubmit="{toggle_guard}">
+                  <input type="hidden" name="id" value="{esc(rid)}">
+                  <input type="hidden" name="on" value="{next_on}">
+                  <button class="btn sm {btn_cls}">{btn_txt}</button>
+                </form>
+                <form method="post" action="/gateway/rule-del" style="display:inline"
+                      onsubmit="return confirm('删除此规则?')">
+                  <input type="hidden" name="id" value="{esc(rid)}">
+                  <button class="btn sm ghost">删除</button>
+                </form>
+              </td>
+            </tr>""")
+        rules_html = f'<table class="grid"><tbody>{"".join(rows)}</tbody></table>'
+    else:
+        rules_html = '<div class="dim small">还没有规则。用下面的按钮新建一条。</div>'
+    hist_js = _json.dumps(hist, ensure_ascii=False)
     # 当前 feed 会下发的量(与 /api/gateway_feed 同源, 便于确认名单已生效)
     sigs = store.list_signatures() if store else []
     n_ip = sum(1 for r in sigs if r["kind"] == "ip" and r["value"])
@@ -2198,16 +2258,46 @@ def render_gateway(store, msg="", err="") -> str:
     </div>
 
     <div class="card">
-      <div class="card-title">邮箱前缀自动入库</div>
-      <form method="post" action="/gateway/auto-prefix" class="autoform">
-        <label class="switch" style="margin-right:8px"><input type="checkbox" name="on" {'checked' if auto_pfx else ''} onchange="this.form.submit()"><span class="track"></span></label>
-        <span>邮箱前缀命中特征库时<b>自动移入内鬼库</b>(其 token 随 feed 下发给网关拦截)</span>
-      </form>
-      <div class="dim small" style="margin-top:8px">
-        开启后: 每次重算把<b>邮箱命中特征库前缀</b>的账号自动移进内鬼库(注册即抓, 无需人工审)。
-        前缀请在<a href="/featlib">特征库</a>登记有辨识度的串, <b>别用通用词</b>以免误伤正常用户。
+      <div class="card-title">自动入库规则</div>
+      <div class="dim small" style="margin-bottom:10px">
+        命中<a href="/featlib">特征库</a>时自动把账号<b>移入内鬼库</b>(其 token 随 feed 下发拦截, 可一键移 Lv.spy 组)。
+        每条规则 = 一组<b>必须同时命中</b>的特征(且), 规则之间是<b>或</b>。命中数据来自上次重算。
+      </div>
+      {rules_html}
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
+        <div class="dim small" style="margin-bottom:6px"><b>新建规则</b> · 勾选需要<b>同时命中</b>的特征:</div>
+        <form method="post" action="/gateway/rule-add" id="rulef"
+              onsubmit="return ruleSubmit()">
+          <label class="rk"><input type="checkbox" name="c" value="email" onchange="ruleCalc()"> 邮箱前缀</label>
+          <label class="rk"><input type="checkbox" name="c" value="ip" onchange="ruleCalc()"> IP</label>
+          <label class="rk"><input type="checkbox" name="c" value="ua" onchange="ruleCalc()"> UA</label>
+          <label class="rk"><input type="checkbox" name="c" value="asn" onchange="ruleCalc()"> 机房ASN</label>
+          <span id="rulehint" class="dim small" style="margin-left:8px"></span>
+          <div style="margin-top:10px"><button class="btn sm" id="rulebtn" disabled>新建并启用</button></div>
+        </form>
+        <div class="dim small" style="margin-top:8px">
+          提示: <b>机房ASN 不能单独成规则</b>(整个机房太宽, 会误伤), 只能和别的特征组合。
+          启用宽规则前请看清"预计命中"数——它会把存量匹配账号一并移入。
+        </div>
       </div>
     </div>
+    <script>
+      var HIST = {hist_js};
+      function ruleCalc() {{
+        var cs = Array.prototype.filter.call(document.querySelectorAll('#rulef input[name=c]'), function(x){{return x.checked;}}).map(function(x){{return x.value;}});
+        var btn = document.getElementById('rulebtn'), hint = document.getElementById('rulehint');
+        if (cs.length === 0) {{ btn.disabled = true; hint.textContent = ''; return 0; }}
+        if (cs.length === 1 && cs[0] === 'asn') {{ btn.disabled = true; hint.textContent = '机房ASN 不能单独成规则'; return 0; }}
+        var n = 0;
+        for (var k in HIST) {{ var ks = k ? k.split(',') : []; if (cs.every(function(c){{return ks.indexOf(c) >= 0;}})) n += HIST[k]; }}
+        btn.disabled = false; hint.textContent = '预计命中 ' + n + ' 个账号';
+        return n;
+      }}
+      function ruleSubmit() {{
+        var n = ruleCalc();
+        return confirm('新建并启用此规则? 下次重算会把命中的 ' + n + ' 个账号移入内鬼库。');
+      }}
+    </script>
 
     <div class="card">
       <div class="card-title">网关侧配置示例</div>
@@ -2517,6 +2607,8 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .gsub {{ font-size:12px; color:var(--dim); margin-top:2px; }}
   .chips {{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }}
   .chip {{ background:#efefef; border:1px solid var(--line); border-radius:999px; padding:4px 11px; font-size:13px; }}
+  .rk {{ display:inline-flex; align-items:center; gap:5px; margin-right:14px; cursor:pointer; user-select:none; }}
+  .rk input {{ cursor:pointer; }}
   .badge {{ color:#fff; padding:2px 10px; border-radius:4px; font-size:12px; font-weight:600; white-space:nowrap; }}
   .tabs {{ display:flex; gap:4px; margin-bottom:12px; }}
   .tab {{ text-decoration:none; color:#444444; padding:5px 13px; border-radius:5px; font-size:13px; background:#efefef; }}
@@ -3657,11 +3749,34 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/gateway/key":
                 store.set_kv("gateway_feed_key", secrets.token_hex(16))
                 self._to("/gateway?msg=" + quote("网关 Feed 密钥已生成, 去网关侧配置")); return
-            if path == "/gateway/auto-prefix":
+            if path == "/gateway/rule-add":
+                conds = sorted({c for c in formq.get("c", []) if c in store._VALID_COND})
+                if not conds:
+                    self._to("/gateway?err=" + quote("未选择特征")); return
+                if conds == ["asn"]:
+                    self._to("/gateway?err=" + quote("机房ASN 不能单独成规则, 请和别的特征组合")); return
+                rules = store.get_auto_insider_rules()
+                rid = "+".join(conds)
+                if any((r.get("id") or "+".join(r.get("conds") or [])) == rid for r in rules):
+                    self._to("/gateway?err=" + quote("已存在相同规则")); return
+                rules.append({"id": rid, "conds": conds, "on": True})
+                store.set_auto_insider_rules(rules)
+                self._to("/gateway?msg=" + quote("规则已新建并启用, 下次重算生效")); return
+            if path == "/gateway/rule-toggle":
+                rid = formq.get("id", [""])[0]
                 on = formq.get("on", [""])[0] in ("on", "1", "true")
-                store.set_kv("auto_prefix_insider", "1" if on else "0")
-                self._to("/gateway?msg=" + quote(
-                    "已开启: 邮箱前缀命中自动移入内鬼库" if on else "已关闭: 前缀命中不再自动入库")); return
+                rules = store.get_auto_insider_rules()
+                for r in rules:
+                    if (r.get("id") or "+".join(r.get("conds") or [])) == rid:
+                        r["on"] = on
+                store.set_auto_insider_rules(rules)
+                self._to("/gateway?msg=" + quote("已启用规则" if on else "已停用规则")); return
+            if path == "/gateway/rule-del":
+                rid = formq.get("id", [""])[0]
+                rules = [r for r in store.get_auto_insider_rules()
+                         if (r.get("id") or "+".join(r.get("conds") or [])) != rid]
+                store.set_auto_insider_rules(rules)
+                self._to("/gateway?msg=" + quote("规则已删除")); return
             if path == "/settings/sync-scope":
                 on = form.get("paid_only") in ("on", "1", "true")
                 store.set_kv("sync_paid_only", "1" if on else "0")

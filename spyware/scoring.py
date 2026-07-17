@@ -40,6 +40,7 @@ class RiskResult:
     traffic_bytes: int = 0
     created_at: Optional[datetime] = None
     expired_at: Optional[datetime] = None
+    feature_kinds: set = field(default_factory=set)   # 命中的特征类型(供自动入库规则)
 
     @property
     def tags(self) -> List[str]:
@@ -61,7 +62,8 @@ def _display(f: TokenFeatures) -> dict:
                 distinct_ips=f.distinct_ips, distinct_uas=f.distinct_uas,
                 online_ips=f.online_ips, ip_shared_users=f.ip_shared_users,
                 pull_count=f.pull_count, last_pull=f.last_pull, main_ip=f.main_ip,
-                traffic_bytes=f.traffic_bytes, created_at=f.created_at, expired_at=f.expired_at)
+                traffic_bytes=f.traffic_bytes, created_at=f.created_at, expired_at=f.expired_at,
+                feature_kinds=f.feature_kinds)
 
 
 def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskResult:

@@ -261,6 +261,42 @@ class FeatureLib:
             hits = hits[:8] + [f"…等{len(hits)}项"]
         return ", ".join(hits)
 
+    def match_kinds(self, ips, uas, email, asndb=None) -> set:
+        """返回命中的特征"类型"集合: {'ip','asn','ua','email'} 的子集。供自动入库规则判定。"""
+        kinds = set()
+        if self.empty:
+            return kinds
+        for ip in ips or ():
+            try:
+                addr = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if any(addr in n for n in self.exempt_nets):
+                continue   # 自有IP/反代IP 不算命中
+            if "ip" not in kinds and any(addr in n for n in self.ip_nets):
+                kinds.add("ip")
+            if "asn" not in kinds and self.asns and asndb is not None:
+                asn, _ = asndb.lookup(ip)
+                if asn in self.asns:
+                    kinds.add("asn")
+        if "ua" not in kinds:
+            for ua in uas or ():
+                for p in self.ua_pats:
+                    try:
+                        hit = bool(re.search(p, ua or "", re.IGNORECASE))
+                    except re.error:
+                        hit = p.lower() in (ua or "").lower()
+                    if hit:
+                        kinds.add("ua")
+                        break
+                if "ua" in kinds:
+                    break
+        if email:
+            el = email.lower()
+            if any(e in el for e in self.emails):
+                kinds.add("email")
+        return kinds
+
 
 class InsiderMatcher:
     """内鬼库分维度匹配: 精确IP / 同网段 / 同ASN / 同UA / 邮箱前缀 / 行为模式相似。

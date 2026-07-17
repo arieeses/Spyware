@@ -868,6 +868,37 @@ class Store:
         )
         self.conn.commit()
 
+    # —— 自动入库规则(命中特征库 → 移入内鬼库) ——
+    # 规则 = {"id","conds":[类型...],"on":bool}; conds 全命中(AND)才触发, 规则间 OR。
+    # 类型取自 {'email','ip','ua','asn'}。存 kv auto_insider_rules(JSON)。
+    _VALID_COND = {"email", "ip", "ua", "asn"}
+
+    def get_auto_insider_rules(self):
+        import json as _json
+        raw = self.get_kv("auto_insider_rules", "")
+        if raw:
+            try:
+                rules = _json.loads(raw)
+                if isinstance(rules, list):
+                    return rules
+            except (ValueError, TypeError):
+                pass
+        # 首次: 从旧开关 auto_prefix_insider 迁移出一条"邮箱"规则
+        on = self.get_kv("auto_prefix_insider", "1") != "0"
+        return [{"id": "email", "conds": ["email"], "on": on}]
+
+    def set_auto_insider_rules(self, rules) -> None:
+        import json as _json
+        clean = []
+        for r in rules or []:
+            conds = [c for c in (r.get("conds") or []) if c in self._VALID_COND]
+            conds = sorted(set(conds))
+            if not conds:
+                continue
+            clean.append({"id": r.get("id") or "+".join(conds),
+                          "conds": conds, "on": bool(r.get("on"))})
+        self.set_kv("auto_insider_rules", _json.dumps(clean, ensure_ascii=False))
+
     # —— 管理员 / 会话 / 重置 ——
     def admin_count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) c FROM admins").fetchone()["c"]
