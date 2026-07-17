@@ -570,7 +570,7 @@ def render_dashboard(store: Store) -> str:
         stat("正常/排除", f'{counts["正常"]}/{excluded}', "#8b8f98", href="/risk"),
         stat("用户总数", total_users, href="/risk"),
         stat("拉取记录", _pull_count(store), href="/runlog"),
-        stat("v2board 面板", n_v2b, "#7c5cff", href="/panels/v2board"),
+        stat("数据面板", n_v2b, "#7c5cff", href="/panels/v2board"),
         stat("日志源", n_log, "#7c5cff", href="/panels/log"),
     ])
     return f"""
@@ -681,19 +681,12 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
         rows = '<tr><td colspan="5" class="dim" style="padding:16px">暂无, 点右上「＋ 添加」</td></tr>'
 
     if kind == "v2board":
-        title, run_label, add_id = "v2board 面板", "▶ 同步全部", "addV2b"
-        hint = "读 v2_user 的 token/注册时间/流量/分组, 补全用户画像。建议单独建只读账号。"
+        title, run_label, add_id = "数据面板", "▶ 同步全部", "addV2b"
+        hint = ""
         modals = _v2b_modals()
-        extra = """
-        <div class="card">
-          <div class="dim small">改了面板名后, 已同步的用户面板已自动跟着改。若风险名单里仍有<b>改名前的旧名或已删除的面板</b>(遗留数据), 点下面清理:
-            <form method="post" action="/panels/cleanup" style="margin-top:8px"
-                  onsubmit="return confirm('删除面板不属于当前任何 v2board 源的遗留用户/评分? 建议先把要保留的面板都同步一遍再清理。')">
-              <button class="btn ghost">🧹 清理改名/删除遗留的面板数据</button></form>
-          </div>
-        </div>"""
+        extra = ""
     else:
-        title, run_label, add_id = "1Panel / aaPanel 日志", "▶ 导入全部", "addLog"
+        title, run_label, add_id = "添加日志接口", "▶ 导入全部", "addLog"
         hint = ("远程面板用<b>探针接入</b>(一键安装, 自动上报日志+负载); 中央与面板同机可用本地文件。"
                 "日志路径与上报间隔都可在每行「编辑」里改。")
         modals = _log_modals([p["name"] for p in store.list_sources() if p["type"] == "v2board"])
@@ -721,7 +714,7 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
           <a class="btn ghost" href="/runlog?kind={kind}">日志</a>
         </div>
       </div>
-      <div class="dim small" style="margin-bottom:10px">{hint}</div>
+      {f'<div class="dim small" style="margin-bottom:10px">{hint}</div>' if hint else ''}
       <div class="tablewrap">
       <table class="grid">
         <thead><tr><th>名称</th><th>目标</th><th>状态</th><th>同步方式</th><th>操作</th></tr></thead>
@@ -816,7 +809,7 @@ def _v2b_modals() -> str:
     cols_e = _V2B_COLS  # 编辑时由 JS 填占位
     return f"""
     <div class="modal-bg" id="addV2b"><div class="modal">
-      <h3>添加 v2board 面板</h3>
+      <h3>添加数据面板</h3>
       <form method="post" action="/sources/add">
         <input type="hidden" name="type" value="v2board">
         <div class="mfield"><label class="dim small">机场名称</label><input name="name" placeholder="如: 机场A" required></div>
@@ -831,7 +824,7 @@ def _v2b_modals() -> str:
       </form>
     </div></div>
     <div class="modal-bg" id="editV2b"><div class="modal">
-      <h3>编辑 v2board 面板</h3>
+      <h3>编辑数据面板</h3>
       <form method="post" action="/sources/edit">
         <input type="hidden" name="id" id="ev_id">
         <div class="mfield"><label class="dim small">机场名称</label><input name="name" id="ev_name"></div>
@@ -1536,7 +1529,6 @@ def render_insiders(store, msg="", err="", size="10", page="1") -> str:
         </div>
       </div>
       {f'<div class="dim small" style="margin-top:6px">分组状态上次检查: {esc(spy_status_at)} · 依据上次同步的本地数据(要最新请先到「运行控制」同步)</div>' if spy_status_at else ''}
-      <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>(但在名单里<b>搜索仍可找到并标注「内鬼」</b>), 它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。<b>点某行看详情</b>, 每行「导入」可单独导入该号特征, 「移出」还原回名单。</div>
       <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js}, _INS_FEAT={feat_js}, _INS_FEAT_ALL={agg_js};</script>
       {_COPYLIST_JS}{_IMPFEAT_JS}
       <div class="tablewrap"><table class="grid">
@@ -2018,7 +2010,6 @@ as135377" style="width:100%;font-family:inherit;font-size:13px">{esc(batch)}</te
         <tbody>{rows}</tbody>
       </table></div>
       {pager}
-      <div class="dim small" style="margin-top:8px">点用户行看详情; 「同IP」点开列出同 IP 账号; 「移入内鬼」把确认内鬼移进内鬼库(从名单移除, 特征继续检测)。</div>
     </div>{col_modal}{batch_modal}
     <div class="modal-bg" id="exportModal"><div class="modal">
       <h3>导出CSV</h3><div class="dim small">选要导出的风险等级(可多选), 按当前面板/搜索筛选导出</div>
@@ -3443,11 +3434,6 @@ class Handler(BaseHTTPRequestHandler):
                 d = form.get("dir", "up")
                 store.move_source(int(form["id"]), "down" if d == "down" else "up")
                 self._back(); return
-            if path == "/panels/cleanup":
-                valid = {s["name"] for s in store.list_sources() if s["type"] == "v2board"}
-                n = store.purge_orphan_panels(valid)
-                self._to("/panels/v2board?msg=" + quote(f"已清理改名/删除遗留的面板数据 {n} 条用户"))
-                return
             if path == "/sources/toggle":
                 store.toggle_source(int(form["id"])); self._back(); return
             if path == "/sources/run":
