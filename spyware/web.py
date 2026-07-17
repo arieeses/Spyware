@@ -2765,7 +2765,7 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   function trafficRecords(tok,page){{
     openM('trafficModal');
     if(_trafTok===tok && _trafRows){{trafPage(page);return;}}  // 已取过: 直接本地翻页
-    document.getElementById('trafficBody').innerHTML='<div class="dim">加载中…(查询远程数据库)</div>';
+    document.getElementById('trafficBody').innerHTML='<div class="dim">加载中…</div>';
     fetch('/api/traffic?token='+encodeURIComponent(tok)).then(function(r){{return r.json();}}).then(function(d){{
       if(d.error){{document.getElementById('trafficBody').innerHTML='<div class="dim">'+esc0(d.error)+'</div>';return;}}
       _trafRows=d.rows||[]; _trafTok=tok; trafPage(1);
@@ -3096,8 +3096,12 @@ class Handler(BaseHTTPRequestHandler):
                              "up": _human_bytes(r["u"]), "down": _human_bytes(r["d"]),
                              "rate": f'{float(r["rate"] or 1):.2f}'} for r in local]
                     out = {"rows": rows, "total": len(rows)}
+                elif store.has_any_traffic():
+                    # 已同步过流量(别的用户有记录), 该用户查不到 = 同步窗口内确实 0 流量
+                    out = {"error": "该用户近三个月无流量记录(同步期间上下行均为 0)"}
                 else:
-                    out = {"error": "该用户暂无本地流量, 到「运行控制」同步 v2board 后可见"}
+                    # 整个 traffic_daily 为空 = 还没同步过流量
+                    out = {"error": "尚未同步流量, 到「运行控制」同步 v2board 后可见"}
                 self._send(json.dumps(out, ensure_ascii=False).encode(),
                            "application/json; charset=utf-8")
                 return

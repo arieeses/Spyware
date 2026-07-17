@@ -807,6 +807,10 @@ class Store:
             (panel,)).fetchall()
         return {r["user_id"]: r["token"] for r in rows}
 
+    def has_any_traffic(self) -> bool:
+        """本地 traffic_daily 是否有任何数据(用于区分"从未同步流量" vs "该用户确实没流量")。"""
+        return self.conn.execute("SELECT 1 FROM traffic_daily LIMIT 1").fetchone() is not None
+
     def clear_traffic_daily(self, panel: str) -> None:
         self.conn.execute("DELETE FROM traffic_daily WHERE panel=?", (panel,))
         self.conn.commit()
