@@ -303,7 +303,7 @@ def _user_detail(store, tok: str) -> dict:
             "banned": (u["banned"] if u is not None and "banned" in u.keys() else 0),
             "traffic": _human_bytes(row["traffic_bytes"] or 0),
             "score": row["score"], "level": row["level"],
-            "signals": [(s.get("detail") if s.get("name") == "命中特征库" and s.get("detail")
+            "signals": [(s.get("detail") if s.get("name") in ("命中特征库", "命中黑名单") and s.get("detail")
                          else s.get("name")) for s in sigs],
             "pull_count": row["pull_count"], "distinct_ips": row["distinct_ips"],
             "distinct_uas": row["distinct_uas"], "online_ips": row["online_ips"],
@@ -348,7 +348,7 @@ def _user_detail(store, tok: str) -> dict:
         "expired": exp,
         "banned": (user["banned"] if user and "banned" in user.keys() else 0),
         "traffic": _human_bytes(r.traffic_bytes), "score": r.score, "level": r.level,
-        "signals": [(s.detail if s.name == "命中特征库" and s.detail else s.name) for s in r.signals],
+        "signals": [(s.detail if s.name in ("命中特征库", "命中黑名单") and s.detail else s.name) for s in r.signals],
         "pull_count": r.pull_count, "distinct_ips": r.distinct_ips,
         "distinct_uas": r.distinct_uas, "online_ips": r.online_ips,
         "ip_shared_users": r.ip_shared_users,
@@ -1745,9 +1745,9 @@ _DETAIL_MODALS = """
       <h4 style="margin:0 0 10px" id="sameIpTitle">同 IP 账号</h4>
       <div id="sameIpBody" class="udetail modalscroll"><div class="dim">加载中…</div></div>
     </div></div>
-    <div class="modal-bg" id="userModal"><div class="modal" style="width:min(720px,95vw);position:relative;overflow:hidden">
+    <div class="modal-bg" id="userModal"><div class="modal" style="width:min(920px,96vw);position:relative;overflow:hidden">
       <button class="modalx" type="button" onclick="closeM('userModal')" aria-label="关闭">×</button>
-      <div id="userBody" class="udetail modalscroll"><div class="dim">加载中…</div></div>
+      <div id="userBody" class="udetail modalscroll" style="max-height:82vh"><div class="dim">加载中…</div></div>
     </div></div>
     <div class="modal-bg" id="trafficModal"><div class="modal" style="width:min(640px,95vw);position:relative;overflow:hidden">
       <button class="modalx" type="button" onclick="closeM('trafficModal')" aria-label="关闭">×</button>
