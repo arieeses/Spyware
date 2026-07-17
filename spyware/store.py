@@ -660,28 +660,35 @@ class Store:
     def list_signatures(self):
         return self.conn.execute("SELECT * FROM signatures ORDER BY kind, id DESC").fetchall()
 
-    def _sig_where(self, kind, search):
+    def _sig_where(self, kind, search, terms=None):
         clauses, args = [], []
         if kind and kind != "all":
             clauses.append("kind=?"); args.append(kind)
-        if search:
+        if terms:                              # 批量搜索: 命中任一词(值/备注子串)
+            ors = []
+            for t in terms:
+                like = f"%{t}%"
+                ors.append("(value LIKE ? OR note LIKE ?)"); args += [like, like]
+            if ors:
+                clauses.append("(" + " OR ".join(ors) + ")")
+        elif search:
             like = f"%{search}%"
             clauses.append("(value LIKE ? OR note LIKE ?)"); args += [like, like]
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), args
 
-    def count_signatures(self, kind=None, search="") -> int:
-        where, args = self._sig_where(kind, search)
+    def count_signatures(self, kind=None, search="", terms=None) -> int:
+        where, args = self._sig_where(kind, search, terms)
         return self.conn.execute(f"SELECT COUNT(*) FROM signatures{where}", args).fetchone()[0]
 
-    def list_signatures_page(self, kind=None, search="", limit=10, offset=0):
-        where, args = self._sig_where(kind, search)
+    def list_signatures_page(self, kind=None, search="", limit=10, offset=0, terms=None):
+        where, args = self._sig_where(kind, search, terms)
         return self.conn.execute(
             f"SELECT * FROM signatures{where} ORDER BY id DESC LIMIT ? OFFSET ?",
             args + [limit, offset]).fetchall()
 
-    def signature_kind_counts(self, search="") -> dict:
-        """各类型条数(受 search 影响), 供特征库标签页角标。"""
-        where, args = self._sig_where(None, search)
+    def signature_kind_counts(self, search="", terms=None) -> dict:
+        """各类型条数(受 search/批量词 影响), 供特征库标签页角标。"""
+        where, args = self._sig_where(None, search, terms)
         rows = self.conn.execute(
             f"SELECT kind, COUNT(*) c FROM signatures{where} GROUP BY kind", args).fetchall()
         return {r["kind"]: r["c"] for r in rows}

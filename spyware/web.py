@@ -1227,18 +1227,23 @@ def _parse_sig_lines(text: str, kind: str = "auto"):
 _SIG_KINDS = [("all", "全部"), ("ip", "IP·CIDR"), ("ua", "UA"), ("asn", "ASN"), ("email", "邮箱")]
 
 
-def render_featurelib(store, msg="", err="", search="", kind="all", size="10", page="1") -> str:
+def render_featurelib(store, msg="", err="", search="", kind="all", size="10", page="1", batch="") -> str:
     s = (search or "").strip()
     if kind not in ("all", "ip", "ua", "asn", "email"):
         kind = "all"
     if str(size) not in ("10", "50", "100", "150", "500"):
         size = "10"
-    kc = store.signature_kind_counts(s)              # 各类型条数(受搜索影响), 供标签角标
+    batch = (batch or "").strip()
+    batch_terms = _parse_batch_terms(batch) if batch else []
+    if batch_terms:                                  # 批量搜索优先, 忽略单条搜索
+        s = ""
+    kc = store.signature_kind_counts(s, batch_terms or None)   # 各类型条数(受搜索/批量影响)
     total_all = sum(kc.values())
-    total = store.count_signatures(kind, s)          # 当前标签+搜索下的条数
+    total = store.count_signatures(kind, s, batch_terms or None)   # 当前标签+搜索下的条数
     psize, pg, pages, all_mode = _paginate(size, page, total, 10)
     rows = store.list_signatures_page(kind, s, limit=(total or 1) if all_mode else psize,
-                                      offset=0 if all_mode else (pg - 1) * psize)
+                                      offset=0 if all_mode else (pg - 1) * psize,
+                                      terms=batch_terms or None)
     trs = ""
     for r in rows:
         trs += (f'<tr><td style="width:34px;text-align:center">'
@@ -1252,14 +1257,14 @@ def render_featurelib(store, msg="", err="", search="", kind="all", size="10", p
     if not trs:
         trs = (f'<tr><td colspan="6" class="dim" style="padding:16px">没有匹配的特征</td></tr>'
                if (s or kind != "all") else '<tr><td colspan="6" class="dim" style="padding:16px">还没登记特征, 用上面的表单添加</td></tr>')
-    count_label = f'共 {total_all} 条' + (f' · 当前 {total} 条' if (s or kind != "all") else '')
-    # 类型标签页
-    sq = f'&q={quote(s)}' if s else ''
+    count_label = f'共 {total_all} 条' + (f' · 当前 {total} 条' if (s or kind != "all" or batch_terms) else '')
+    # 类型标签页(带上当前 搜索/批量 条件)
+    qcarry = (f'&q={quote(s)}' if s else (f'&qb={quote(batch)}' if batch_terms else ''))
     tabs = ""
     for k, lb in _SIG_KINDS:
         n = total_all if k == "all" else kc.get(k, 0)
         active = "active" if kind == k else ""
-        tabs += (f'<a class="tab {active}" href="/featlib?kind={k}&size={quote(str(size))}{sq}">'
+        tabs += (f'<a class="tab {active}" href="/featlib?kind={k}&size={quote(str(size))}{qcarry}">'
                  f'{lb} <b>{n}</b></a>')
     tabs = f'<div class="tabs" style="margin:10px 0">{tabs}</div>'
     searchbox = (
@@ -1268,10 +1273,32 @@ def render_featurelib(store, msg="", err="", search="", kind="all", size="10", p
         f'<input type="hidden" name="size" value="{esc(str(size))}">'
         f'<input name="q" value="{esc(s)}" placeholder="搜索 特征值/备注" '
         f'style="width:220px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
+        f'<button class="btn sm ghost" type="button" onclick="openM(\'featBatchModal\')">批量搜索</button>'
         f'<button class="btn sm">搜索</button>'
-        + (f'<a class="btn sm ghost" href="/featlib?kind={kind}">清除</a>' if s else '')
+        + (f'<a class="btn sm ghost" href="/featlib?kind={kind}">清除</a>' if (s or batch_terms) else '')
         + '</form>')
-    pager = _pager_html("/featlib", {"kind": kind, "q": s}, size, pg, pages, ["10", "50", "100", "150", "500"])
+    feat_batch_modal = f"""
+    <div class="modal-bg" id="featBatchModal"><div class="modal">
+      <h3>批量搜索</h3>
+      <div class="dim small">每行(或用逗号/空格分隔)一个词, 命中<b>任一</b>即列出(匹配特征值/备注)。</div>
+      <form method="get" action="/featlib">
+        <input type="hidden" name="kind" value="{esc(kind)}">
+        <input type="hidden" name="size" value="{esc(str(size))}">
+        <div class="mfield"><textarea name="qb" rows="10" placeholder="315311741&#10;1.24.16.0/24&#10;Surfboard" style="width:100%;font-family:inherit;font-size:13px">{esc(batch)}</textarea></div>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" onclick="closeM('featBatchModal')">取消</button>
+          <button class="btn">批量搜索</button>
+        </div>
+      </form>
+    </div></div>"""
+    batch_banner = ""
+    if batch_terms:
+        batch_banner = (
+            f'<div class="dim small" style="margin:8px 0;padding:8px 10px;border-left:3px solid var(--pri);background:var(--bg)">'
+            f'批量搜索: <b>{len(batch_terms)}</b> 个条件 · 命中 <b>{total}</b> 条 '
+            f'<a href="/featlib?kind={kind}" style="margin-left:8px">清除</a> · '
+            f'<a href="#" onclick="openM(\'featBatchModal\');return false">编辑条件</a></div>')
+    pager = _pager_html("/featlib", {"kind": kind, "q": s, "qb": batch}, size, pg, pages, ["10", "50", "100", "150", "500"])
     return f"""{_card_alert(msg, err)}
     <div class="card">
       <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
@@ -1330,12 +1357,13 @@ def render_featurelib(store, msg="", err="", search="", kind="all", size="10", p
         </form>
       </div>
       {tabs}
+      {batch_banner}
       <div class="tablewrap" style="margin-top:12px"><table class="grid">
         <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" onclick="featToggleAll(this)" title="全选本页"></th><th>类型</th><th>特征值</th><th>备注</th><th>添加时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
       {pager}
-    </div>
+    </div>{feat_batch_modal}
     <script>
       function featToggleAll(m) {{
         var bs = document.querySelectorAll('.fchk');
@@ -3157,7 +3185,8 @@ class Handler(BaseHTTPRequestHandler):
             elif active == "featlib":
                 content = render_featurelib(store, q.get("msg", [""])[0], q.get("err", [""])[0],
                                             q.get("q", [""])[0], q.get("kind", ["all"])[0],
-                                            q.get("size", ["10"])[0], q.get("page", ["1"])[0])
+                                            q.get("size", ["10"])[0], q.get("page", ["1"])[0],
+                                            q.get("qb", [""])[0])
             elif active == "insiders":
                 content = render_insiders(store, q.get("msg", [""])[0], q.get("err", [""])[0],
                                           q.get("size", ["10"])[0], q.get("page", ["1"])[0])
