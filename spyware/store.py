@@ -691,6 +691,21 @@ class Store:
         self.conn.commit()
         self.bump_data_version()
 
+    def delete_signatures(self, ids) -> int:
+        """批量删除勾选的特征(按 id)。返回删除条数。"""
+        ids = [int(i) for i in ids if str(i).strip().isdigit()]
+        if not ids:
+            return 0
+        n = 0
+        for i in range(0, len(ids), 500):     # 分批 IN, 避免占位符过多
+            chunk = ids[i:i + 500]
+            ph = ",".join("?" * len(chunk))
+            cur = self.conn.execute(f"DELETE FROM signatures WHERE id IN ({ph})", chunk)
+            n += cur.rowcount
+        self.conn.commit()
+        self.bump_data_version()
+        return n
+
     def delete_all_signatures(self) -> int:
         n = self.conn.execute("SELECT COUNT(*) FROM signatures").fetchone()[0]
         self.conn.execute("DELETE FROM signatures")

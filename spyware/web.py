@@ -1238,7 +1238,7 @@ def render_featurelib(store, msg="", err="", search="", kind="all", size="10", p
     s = (search or "").strip()
     if kind not in ("all", "ip", "ua", "asn", "email"):
         kind = "all"
-    if str(size) not in ("10", "50", "100", "150"):
+    if str(size) not in ("10", "50", "100", "150", "500"):
         size = "10"
     kc = store.signature_kind_counts(s)              # 各类型条数(受搜索影响), 供标签角标
     total_all = sum(kc.values())
@@ -1248,15 +1248,17 @@ def render_featurelib(store, msg="", err="", search="", kind="all", size="10", p
                                       offset=0 if all_mode else (pg - 1) * psize)
     trs = ""
     for r in rows:
-        trs += (f'<tr><td>{esc(_SIG_KIND_CN.get(r["kind"], r["kind"]))}</td>'
+        trs += (f'<tr><td style="width:34px;text-align:center">'
+                f'<input type="checkbox" class="fchk" name="id" value="{r["id"]}" form="fdelform"></td>'
+                f'<td>{esc(_SIG_KIND_CN.get(r["kind"], r["kind"]))}</td>'
                 f'<td class="mono small">{esc(r["value"])}</td>'
                 f'<td class="small dim">{esc(r["note"] or "")}</td>'
                 f'<td class="small dim">{esc((r["created_at"] or "")[:16])}</td>'
                 f'<td><form method="post" action="/featlib/delete" onsubmit="return confirm(\'删除?\')" style="margin:0">'
                 f'<input type="hidden" name="id" value="{r["id"]}"><button class="btn sm danger">删除</button></form></td></tr>')
     if not trs:
-        trs = (f'<tr><td colspan="5" class="dim" style="padding:16px">没有匹配的特征</td></tr>'
-               if (s or kind != "all") else '<tr><td colspan="5" class="dim" style="padding:16px">还没登记特征, 用上面的表单添加</td></tr>')
+        trs = (f'<tr><td colspan="6" class="dim" style="padding:16px">没有匹配的特征</td></tr>'
+               if (s or kind != "all") else '<tr><td colspan="6" class="dim" style="padding:16px">还没登记特征, 用上面的表单添加</td></tr>')
     count_label = f'共 {total_all} 条' + (f' · 当前 {total} 条' if (s or kind != "all") else '')
     # 类型标签页
     sq = f'&q={quote(s)}' if s else ''
@@ -1276,7 +1278,7 @@ def render_featurelib(store, msg="", err="", search="", kind="all", size="10", p
         f'<button class="btn sm">搜索</button>'
         + (f'<a class="btn sm ghost" href="/featlib?kind={kind}">清除</a>' if s else '')
         + '</form>')
-    pager = _pager_html("/featlib", {"kind": kind, "q": s}, size, pg, pages, ["10", "50", "100", "150"])
+    pager = _pager_html("/featlib", {"kind": kind, "q": s}, size, pg, pages, ["10", "50", "100", "150", "500"])
     return f"""{_card_alert(msg, err)}
     <div class="card">
       <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
@@ -1306,9 +1308,13 @@ def render_featurelib(store, msg="", err="", search="", kind="all", size="10", p
         </form>
         <a class="btn ghost sm" href="/featlib/export{('?q=' + quote(s)) if s else ''}">⬇ 导出CSV{('(匹配 ' + str(len(rows)) + ')') if s else ''}</a>
         <span class="dim small">导入/批量: 逐行自动识别 IP·CIDR / AS号 / @邮箱 / UA, 自动去重</span>
-        <form method="post" action="/featlib/delete-all" style="margin:0 0 0 auto"
-              onsubmit="return confirm('确定删除特征库全部特征? 此操作不可恢复!')">
-          <button class="btn sm danger">删除全部</button></form>
+        <form id="fdelform" method="post" action="/featlib/delete-selected" style="margin:0 0 0 auto"
+              onsubmit="return featDelSel()">
+          <input type="hidden" name="kind" value="{esc(kind)}">
+          <input type="hidden" name="q" value="{esc(s)}">
+          <input type="hidden" name="size" value="{esc(str(size))}">
+          <input type="hidden" name="page" value="{pg}">
+          <button class="btn sm danger">删除选中 <span id="fselcnt"></span></button></form>
       </div>
       <div id="fbatch" style="display:none;margin-top:10px;padding:12px;border:1px solid #e3e7ec;border-radius:8px;background:#fafbfc">
         <form method="post" action="/featlib/batch-add">
@@ -1332,11 +1338,30 @@ def render_featurelib(store, msg="", err="", search="", kind="all", size="10", p
       </div>
       {tabs}
       <div class="tablewrap" style="margin-top:12px"><table class="grid">
-        <thead><tr><th>类型</th><th>特征值</th><th>备注</th><th>添加时间</th><th>操作</th></tr></thead>
+        <thead><tr><th style="width:34px;text-align:center"><input type="checkbox" onclick="featToggleAll(this)" title="全选本页"></th><th>类型</th><th>特征值</th><th>备注</th><th>添加时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
       {pager}
-    </div>"""
+    </div>
+    <script>
+      function featToggleAll(m) {{
+        var bs = document.querySelectorAll('.fchk');
+        for (var i = 0; i < bs.length; i++) bs[i].checked = m.checked;
+        featCount();
+      }}
+      function featCount() {{
+        var n = document.querySelectorAll('.fchk:checked').length;
+        document.getElementById('fselcnt').textContent = n ? '(' + n + ')' : '';
+      }}
+      document.addEventListener('change', function(e) {{
+        if (e.target && e.target.classList && e.target.classList.contains('fchk')) featCount();
+      }});
+      function featDelSel() {{
+        var n = document.querySelectorAll('.fchk:checked').length;
+        if (!n) {{ alert('请先勾选要删除的特征'); return false; }}
+        return confirm('删除选中的 ' + n + ' 条特征? 不可恢复。');
+      }}
+    </script>"""
 
 
 _COPYLIST_JS = """<script>
@@ -3501,9 +3526,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/featlib/delete":
                 store.delete_signature(int(form["id"]))
                 self._to("/featlib?msg=" + quote("已删除")); return
-            if path == "/featlib/delete-all":
-                n = store.delete_all_signatures()
-                self._to("/featlib?msg=" + quote(f"已删除全部 {n} 条特征")); return
+            if path == "/featlib/delete-selected":
+                ids = formq.get("id", [])
+                n = store.delete_signatures(ids)
+                kind = (formq.get("kind", ["all"])[0] or "all")
+                qv = formq.get("q", [""])[0]
+                sz = formq.get("size", ["10"])[0]
+                back = f"/featlib?kind={quote(kind)}&size={quote(sz)}"
+                if qv:
+                    back += "&q=" + quote(qv)
+                self._to(back + "&msg=" + quote(f"已删除选中 {n} 条特征")); return
             if path == "/insiders/add":
                 tok = form.get("token", "").strip()
                 if tok:
