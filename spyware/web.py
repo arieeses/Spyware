@@ -1231,16 +1231,21 @@ def _parse_sig_lines(text: str, kind: str = "auto"):
     return out
 
 
-def render_featurelib(store, msg="", err="", search="") -> str:
-    all_rows = store.list_signatures()
-    total = len(all_rows)
+_SIG_KINDS = [("all", "全部"), ("ip", "IP·CIDR"), ("ua", "UA"), ("asn", "ASN"), ("email", "邮箱")]
+
+
+def render_featurelib(store, msg="", err="", search="", kind="all", size="10", page="1") -> str:
     s = (search or "").strip()
-    if s:
-        sl = s.lower()
-        rows = [r for r in all_rows if sl in (
-            f'{_SIG_KIND_CN.get(r["kind"], r["kind"])} {r["value"] or ""} {r["note"] or ""}').lower()]
-    else:
-        rows = all_rows
+    if kind not in ("all", "ip", "ua", "asn", "email"):
+        kind = "all"
+    if str(size) not in ("10", "50", "100", "150"):
+        size = "10"
+    kc = store.signature_kind_counts(s)              # 各类型条数(受搜索影响), 供标签角标
+    total_all = sum(kc.values())
+    total = store.count_signatures(kind, s)          # 当前标签+搜索下的条数
+    psize, pg, pages, all_mode = _paginate(size, page, total, 10)
+    rows = store.list_signatures_page(kind, s, limit=(total or 1) if all_mode else psize,
+                                      offset=0 if all_mode else (pg - 1) * psize)
     trs = ""
     for r in rows:
         trs += (f'<tr><td>{esc(_SIG_KIND_CN.get(r["kind"], r["kind"]))}</td>'
@@ -1250,16 +1255,28 @@ def render_featurelib(store, msg="", err="", search="") -> str:
                 f'<td><form method="post" action="/featlib/delete" onsubmit="return confirm(\'删除?\')" style="margin:0">'
                 f'<input type="hidden" name="id" value="{r["id"]}"><button class="btn sm danger">删除</button></form></td></tr>')
     if not trs:
-        trs = (f'<tr><td colspan="5" class="dim" style="padding:16px">没有匹配「{esc(s)}」的特征</td></tr>'
-               if s else '<tr><td colspan="5" class="dim" style="padding:16px">还没登记特征, 用上面的表单添加</td></tr>')
-    count_label = (f'共 {total} 条 · 匹配 {len(rows)} 条' if s else f'共 {total} 条')
+        trs = (f'<tr><td colspan="5" class="dim" style="padding:16px">没有匹配的特征</td></tr>'
+               if (s or kind != "all") else '<tr><td colspan="5" class="dim" style="padding:16px">还没登记特征, 用上面的表单添加</td></tr>')
+    count_label = f'共 {total_all} 条' + (f' · 当前 {total} 条' if (s or kind != "all") else '')
+    # 类型标签页
+    sq = f'&q={quote(s)}' if s else ''
+    tabs = ""
+    for k, lb in _SIG_KINDS:
+        n = total_all if k == "all" else kc.get(k, 0)
+        active = "active" if kind == k else ""
+        tabs += (f'<a class="tab {active}" href="/featlib?kind={k}&size={quote(str(size))}{sq}">'
+                 f'{lb} <b>{n}</b></a>')
+    tabs = f'<div class="tabs" style="margin:10px 0">{tabs}</div>'
     searchbox = (
         f'<form method="get" action="/featlib" style="margin-left:auto;display:flex;gap:6px">'
-        f'<input name="q" value="{esc(s)}" placeholder="搜索 类型/特征值/备注" '
+        f'<input type="hidden" name="kind" value="{esc(kind)}">'
+        f'<input type="hidden" name="size" value="{esc(str(size))}">'
+        f'<input name="q" value="{esc(s)}" placeholder="搜索 特征值/备注" '
         f'style="width:220px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
         f'<button class="btn sm">搜索</button>'
-        + ('<a class="btn sm ghost" href="/featlib">清除</a>' if s else '')
+        + (f'<a class="btn sm ghost" href="/featlib?kind={kind}">清除</a>' if s else '')
         + '</form>')
+    pager = _pager_html("/featlib", {"kind": kind, "q": s}, size, pg, pages, ["10", "50", "100", "150"])
     return f"""{_card_alert(msg, err)}
     <div class="card">
       <div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
@@ -1313,10 +1330,12 @@ def render_featurelib(store, msg="", err="", search="") -> str:
           </div>
         </form>
       </div>
+      {tabs}
       <div class="tablewrap" style="margin-top:12px"><table class="grid">
         <thead><tr><th>类型</th><th>特征值</th><th>备注</th><th>添加时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
+      {pager}
     </div>"""
 
 
@@ -1390,18 +1409,23 @@ function _impTgl(a){
 </script>"""
 
 
-def render_insiders(store, msg="", err="") -> str:
+def render_insiders(store, msg="", err="", size="10", page="1") -> str:
     import json as _json
-    rows = store.list_insiders()
+    if str(size) not in ("10", "50", "100", "150"):
+        size = "10"
+    all_rows = store.list_insiders()
+    total = len(all_rows)
+    psize, pg, pages, all_mode = _paginate(size, page, total, 10)
+    rows = all_rows if all_mode else all_rows[(pg - 1) * psize:(pg - 1) * psize + psize]  # 当前页(表格只渲染这些)
     spy_group = store.get_kv("spy_group_name", "Lv.spy") or "Lv.spy"
     try:
         spy_status = _json.loads(store.get_kv("spy_status", "{}") or "{}")
     except (ValueError, TypeError):
         spy_status = {}
     spy_status_at = store.get_kv("spy_status_at", "")
-    ptimes = store.insider_pull_times([r["token"] for r in rows])   # 首次/最后订阅拉取时间
-    all_emails = sorted({(r["email"] or "").strip() for r in rows if (r["email"] or "").strip()})
-    all_ips = sorted({ip for r in rows for ip in _json.loads(r["ips"] or "[]") if ip})
+    ptimes = store.insider_pull_times([r["token"] for r in rows])   # 只查当前页的拉取时间
+    all_emails = sorted({(r["email"] or "").strip() for r in all_rows if (r["email"] or "").strip()})
+    all_ips = sorted({ip for r in all_rows for ip in _json.loads(r["ips"] or "[]") if ip})
     emails_js = _json.dumps(all_emails, ensure_ascii=False)
     ips_js = _json.dumps(all_ips, ensure_ascii=False)
 
@@ -1415,8 +1439,9 @@ def render_insiders(store, msg="", err="") -> str:
     ipc = IpClassifier()   # 导入时过滤自有/反代 IP
     uac = UaClassifier()   # 导入时过滤自有 UA
     feat = {}
+    page_tokens = {r["token"] for r in rows}   # 只把当前页的逐条特征塞进 JSON(减小体积)
     agg = {"ip": set(), "ua": set(), "email": set(), "asn": set(), "host": set()}
-    for r in rows:
+    for r in all_rows:                          # 聚合(复制/导入全部)需覆盖所有内鬼
         ips = _json.loads(r["ips"] or "[]")
         uas = _json.loads(r["uas"] or "[]")
         asns = _json.loads(r["asns"] or "[]")
@@ -1437,7 +1462,8 @@ def render_insiders(store, msg="", err="") -> str:
             "asn": ["AS" + str(a) for a in sorted(set(asns))],
             "host": sorted(set(hosts)),
         }
-        feat[r["token"]] = entry
+        if r["token"] in page_tokens:
+            feat[r["token"]] = entry
         for k in agg:
             agg[k].update(entry[k])
     feat_js = _json.dumps(feat, ensure_ascii=False)
@@ -1474,7 +1500,7 @@ def render_insiders(store, msg="", err="") -> str:
     return f"""{_card_alert(msg, err)}
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-        <div class="card-title" style="margin:0">内鬼库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {len(rows)} 个已确认内鬼</span></div>
+        <div class="card-title" style="margin:0">内鬼库 <span class="dim small" style="font-weight:400;margin-left:8px">共 {total} 个已确认内鬼</span></div>
         <div style="display:flex;gap:8px">
           <button class="btn sm ghost" onclick="_copyList(_INS_EMAILS,this)">复制邮箱 ({len(all_emails)})</button>
           <button class="btn sm ghost" onclick="_copyList(_INS_IPS,this)">复制IP ({len(all_ips)})</button>
@@ -1488,10 +1514,11 @@ def render_insiders(store, msg="", err="") -> str:
       <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>(但在名单里<b>搜索仍可找到并标注「内鬼」</b>), 它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。<b>点某行看详情</b>, 每行「导入」可单独导入该号特征, 「移出」还原回名单。</div>
       <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js}, _INS_FEAT={feat_js}, _INS_FEAT_ALL={agg_js};</script>
       {_COPYLIST_JS}{_IMPFEAT_JS}
-      <div class="tablewrap"><table class="grid sortable">
-        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>{esc(spy_group)}</th><th>IP</th><th data-t="num">最新拉取订阅</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
+      <div class="tablewrap"><table class="grid">
+        <thead><tr><th></th><th>邮箱</th><th>机场</th><th>{esc(spy_group)}</th><th>IP</th><th>最新拉取订阅</th><th>UA</th><th>移入时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
+      {_pager_html("/insiders", {}, size, pg, pages, ["10", "50", "100", "150"])}
     </div>
     <div class="modal-bg" id="impFeatModal"><div class="modal" style="width:min(680px,95vw)">
       <h3>导入内鬼特征到特征库</h3>
@@ -3099,9 +3126,11 @@ class Handler(BaseHTTPRequestHandler):
                                            q.get("sub", [""])[0])
             elif active == "featlib":
                 content = render_featurelib(store, q.get("msg", [""])[0], q.get("err", [""])[0],
-                                            q.get("q", [""])[0])
+                                            q.get("q", [""])[0], q.get("kind", ["all"])[0],
+                                            q.get("size", ["10"])[0], q.get("page", ["1"])[0])
             elif active == "insiders":
-                content = render_insiders(store, q.get("msg", [""])[0], q.get("err", [""])[0])
+                content = render_insiders(store, q.get("msg", [""])[0], q.get("err", [""])[0],
+                                          q.get("size", ["10"])[0], q.get("page", ["1"])[0])
             elif active == "gateway":
                 content = render_gateway(store, q.get("msg", [""])[0], q.get("err", [""])[0],
                                          q.get("tab", ["feed"])[0])
