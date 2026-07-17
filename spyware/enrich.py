@@ -346,6 +346,10 @@ class InsiderMatcher:
     def hit_ip(self, ips) -> bool:
         return any(ip in self.ips for ip in (ips or ()))
 
+    def matched_ips(self, ips) -> list:
+        """返回该账号与内鬼共用的具体 IP(供信号明细展示)。"""
+        return sorted({ip for ip in (ips or ()) if ip in self.ips})
+
     def hit_subnet(self, ips) -> bool:
         for ip in (ips or ()):
             if ip in self.ips:

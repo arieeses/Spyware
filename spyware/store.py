@@ -761,13 +761,18 @@ class Store:
         return {r["token"] for r in self.conn.execute("SELECT token FROM insiders").fetchall()}
 
     def tokens_by_email_substrings(self, subs) -> set:
-        """邮箱前缀/关键词(子串)命中的 token 集合。供网关 feed 把邮箱前缀翻译成 token。"""
+        """邮箱前缀/关键词(子串)命中的 token 集合。供网关 feed 把邮箱前缀翻译成 token。
+        一次扫描: 所有子串 OR 拼进同一条查询, 避免每个子串各扫一遍 users 表(前缀多时很慢)。"""
         subs = [s.strip().lower() for s in (subs or []) if s and s.strip()]
+        if not subs:
+            return set()
         out = set()
-        for s in subs:
+        for i in range(0, len(subs), 200):        # 分批, 防止 OR 条件过多
+            chunk = subs[i:i + 200]
+            cond = " OR ".join(["lower(email) LIKE ?"] * len(chunk))
+            args = [f"%{s}%" for s in chunk]
             for r in self.conn.execute(
-                    "SELECT token FROM users WHERE email IS NOT NULL AND lower(email) LIKE ?",
-                    (f"%{s}%",)):
+                    f"SELECT token FROM users WHERE email IS NOT NULL AND ({cond})", args):
                 out.add(r["token"])
         return out
 

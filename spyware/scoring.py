@@ -170,7 +170,10 @@ def score_token(f: TokenFeatures, cfg: Config = CONFIG, disabled=None) -> RiskRe
 
     # 内鬼库分维度匹配(每个独立开关)
     if on("insider_ip") and f.ins_ip:
-        signals.append(Signal("内鬼同IP", w.insider_ip, "与已确认内鬼同一个IP", tag="内鬼同IP"))
+        _ipd = "、".join(f.ins_ip_hits[:6]) + ("…" if len(f.ins_ip_hits) > 6 else "")
+        signals.append(Signal("内鬼同IP", w.insider_ip,
+                              f"与已确认内鬼同一个IP: {_ipd}" if _ipd else "与已确认内鬼同一个IP",
+                              tag="内鬼同IP"))
     if on("insider_subnet") and f.ins_subnet:
         signals.append(Signal("内鬼同网段", w.insider_subnet,
             f"与已确认内鬼同一网段(/{th.insider_subnet_prefix})", tag="内鬼同网段"))

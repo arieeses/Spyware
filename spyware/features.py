@@ -36,6 +36,7 @@ class TokenFeatures:
     feature_kinds: set = field(default_factory=set)   # 命中的特征类型{'ip','asn','ua','email'}(供自动入库规则)
     # 内鬼库分维度命中
     ins_ip: bool = False          # 与内鬼同一IP(精确)
+    ins_ip_hits: list = field(default_factory=list)   # 具体共用的 IP 列表
     ins_subnet: bool = False      # 与内鬼同一网段
     ins_asn: bool = False         # 与内鬼同一ASN
     ins_ua: bool = False          # 与内鬼同一UA
@@ -231,7 +232,8 @@ def build_features(token: str, pull_rows: List, user_row,
         f.feature_kinds = featlib.match_kinds(ips, uas, f.email, asndb)
     # 内鬼库分维度匹配(精确IP/网段/ASN/UA/邮箱前缀; 行为相似留给 score_token)
     if insmatch is not None and not insmatch.empty:
-        f.ins_ip = insmatch.hit_ip(ips)
+        f.ins_ip_hits = insmatch.matched_ips(ips)   # 与内鬼共用的具体 IP(信号明细)
+        f.ins_ip = bool(f.ins_ip_hits)
         f.ins_subnet = insmatch.hit_subnet(ips)
         f.ins_asn = insmatch.hit_asn(ips, asndb)
         f.ins_ua = insmatch.hit_ua(uas)

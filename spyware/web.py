@@ -303,7 +303,7 @@ def _user_detail(store, tok: str) -> dict:
             "banned": (u["banned"] if u is not None and "banned" in u.keys() else 0),
             "traffic": _human_bytes(row["traffic_bytes"] or 0),
             "score": row["score"], "level": row["level"],
-            "signals": [(s.get("detail") if s.get("name") in ("命中特征库", "命中黑名单") and s.get("detail")
+            "signals": [(s.get("detail") if s.get("name") in ("命中特征库", "命中黑名单", "内鬼同IP") and s.get("detail")
                          else s.get("name")) for s in sigs],
             "pull_count": row["pull_count"], "distinct_ips": row["distinct_ips"],
             "distinct_uas": row["distinct_uas"], "online_ips": row["online_ips"],
@@ -348,7 +348,7 @@ def _user_detail(store, tok: str) -> dict:
         "expired": exp,
         "banned": (user["banned"] if user and "banned" in user.keys() else 0),
         "traffic": _human_bytes(r.traffic_bytes), "score": r.score, "level": r.level,
-        "signals": [(s.detail if s.name in ("命中特征库", "命中黑名单") and s.detail else s.name) for s in r.signals],
+        "signals": [(s.detail if s.name in ("命中特征库", "命中黑名单", "内鬼同IP") and s.detail else s.name) for s in r.signals],
         "pull_count": r.pull_count, "distinct_ips": r.distinct_ips,
         "distinct_uas": r.distinct_uas, "online_ips": r.online_ips,
         "ip_shared_users": r.ip_shared_users,
@@ -2227,11 +2227,10 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
         rules_html = '<div class="dim small">还没有规则。用下面的按钮新建一条。</div>'
     hist_js = _json.dumps(hist, ensure_ascii=False)
     # 当前 feed 会下发的量(与 /api/gateway_feed 同源, 便于确认名单已生效)
-    sigs = store.list_signatures() if store else []
-    n_ip = sum(1 for r in sigs if r["kind"] == "ip" and r["value"])
-    n_ua = sum(1 for r in sigs if r["kind"] == "ua" and r["value"])
-    n_asn = sum(1 for r in sigs if r["kind"] == "asn" and r["value"])
-    emails = [r["value"] for r in sigs if r["kind"] == "email" and r["value"]]
+    kc = store.signature_kind_counts() if store else {}   # 一条 GROUP BY, 不载入全部特征
+    n_ip, n_ua, n_asn = kc.get("ip", 0), kc.get("ua", 0), kc.get("asn", 0)
+    emails = [r["value"] for r in store.list_signatures_page("email", "", limit=100000, offset=0)
+              if r["value"]] if store else []
     try:
         n_tok = len(store.insider_tokens() | store.tokens_by_email_substrings(emails))
     except Exception:  # noqa: BLE001
