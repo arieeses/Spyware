@@ -2163,8 +2163,8 @@ def _rule_preview(hist: dict, conds) -> int:
     return total
 
 
-def render_gateway(store, msg="", err="") -> str:
-    """网关联动 · Feed 独立页: 密钥 / 自动入库规则(可自定义组合) / feed 量 / 网关侧配置示例。"""
+def render_gateway(store, msg="", err="", tab="feed") -> str:
+    """网关联动页: 两个标签页 —— 网关联动(Feed+密钥+配置示例) / 自动入库(规则)。"""
     import json as _json
     feed_key = store.get_kv("gateway_feed_key", "") if store else ""
     rules = store.get_auto_insider_rules() if store else []
@@ -2228,7 +2228,6 @@ def render_gateway(store, msg="", err="") -> str:
     feed_line = (f'<div class="mono small" style="word-break:break-all;background:var(--bg);padding:8px 10px;border-radius:6px">'
                  f'{esc(feed_url_full)}</div>'
                  if feed_key else '<div class="dim small">尚未生成密钥 —— 点下方按钮生成后, 把地址+密钥配到网关。</div>')
-    yaml_key = esc(feed_key) if feed_key else "上面生成的密钥"
     yaml_snip = esc(
         "insider_feed:\n"
         "  enabled: true\n"
@@ -2236,7 +2235,14 @@ def render_gateway(store, msg="", err="") -> str:
         f"  key: \"{feed_key or '这里填密钥'}\"\n"
         "  interval_seconds: 30\n"
         "  timeout_seconds: 5")
-    return f"""{_card_alert(msg, err)}
+    tab = "rules" if tab == "rules" else "feed"
+    tabbar = (
+        f'<div class="tabs" style="margin-bottom:14px">'
+        f'<a class="tab {"active" if tab == "feed" else ""}" href="/gateway?tab=feed">网关联动</a>'
+        f'<a class="tab {"active" if tab == "rules" else ""}" href="/gateway?tab=rules">自动入库</a>'
+        f'</div>')
+
+    feed_tab = f"""
     <div class="card">
       <div class="card-title">网关联动 · Feed</div>
       <div class="dim small" style="margin-bottom:10px">
@@ -2257,6 +2263,13 @@ def render_gateway(store, msg="", err="") -> str:
       </form>
     </div>
 
+    <div class="card">
+      <div class="card-title">网关侧配置示例</div>
+      <div class="dim small" style="margin-bottom:6px">把下面这段贴进网关 <code>config.yaml</code>, 然后 reload 网关(<code>kill -HUP</code> 或 /-/reload):</div>
+      <pre class="mono small" style="background:var(--bg);padding:10px 12px;border-radius:6px;overflow:auto">{yaml_snip}</pre>
+    </div>"""
+
+    rules_tab = f"""
     <div class="card">
       <div class="card-title">自动入库规则</div>
       <div class="dim small" style="margin-bottom:10px">
@@ -2297,13 +2310,11 @@ def render_gateway(store, msg="", err="") -> str:
         var n = ruleCalc();
         return confirm('新建并启用此规则? 下次重算会把命中的 ' + n + ' 个账号移入内鬼库。');
       }}
-    </script>
+    </script>"""
 
-    <div class="card">
-      <div class="card-title">网关侧配置示例</div>
-      <div class="dim small" style="margin-bottom:6px">把下面这段贴进网关 <code>config.yaml</code>, 然后 reload 网关(<code>kill -HUP</code> 或 /-/reload):</div>
-      <pre class="mono small" style="background:var(--bg);padding:10px 12px;border-radius:6px;overflow:auto">{yaml_snip}</pre>
-    </div>"""
+    return f"""{_card_alert(msg, err)}
+    {tabbar}
+    {rules_tab if tab == "rules" else feed_tab}"""
 
 
 def render_settings(admin, msg="", err="", store=None) -> str:
@@ -3126,7 +3137,8 @@ class Handler(BaseHTTPRequestHandler):
                 content = render_domains(store, q.get("panel", [""])[0], q.get("tier", [""])[0],
                                          q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "gateway":
-                content = render_gateway(store, q.get("msg", [""])[0], q.get("err", [""])[0])
+                content = render_gateway(store, q.get("msg", [""])[0], q.get("err", [""])[0],
+                                         q.get("tab", ["feed"])[0])
             elif active == "settings":
                 content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0], store=store)
             elif active == "logstore":
@@ -3752,16 +3764,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/gateway/rule-add":
                 conds = sorted({c for c in formq.get("c", []) if c in store._VALID_COND})
                 if not conds:
-                    self._to("/gateway?err=" + quote("未选择特征")); return
+                    self._to("/gateway?tab=rules&err=" + quote("未选择特征")); return
                 if conds == ["asn"]:
-                    self._to("/gateway?err=" + quote("机房ASN 不能单独成规则, 请和别的特征组合")); return
+                    self._to("/gateway?tab=rules&err=" + quote("机房ASN 不能单独成规则, 请和别的特征组合")); return
                 rules = store.get_auto_insider_rules()
                 rid = "+".join(conds)
                 if any((r.get("id") or "+".join(r.get("conds") or [])) == rid for r in rules):
-                    self._to("/gateway?err=" + quote("已存在相同规则")); return
+                    self._to("/gateway?tab=rules&err=" + quote("已存在相同规则")); return
                 rules.append({"id": rid, "conds": conds, "on": True})
                 store.set_auto_insider_rules(rules)
-                self._to("/gateway?msg=" + quote("规则已新建并启用, 下次重算生效")); return
+                self._to("/gateway?tab=rules&msg=" + quote("规则已新建并启用, 下次重算生效")); return
             if path == "/gateway/rule-toggle":
                 rid = formq.get("id", [""])[0]
                 on = formq.get("on", [""])[0] in ("on", "1", "true")
@@ -3770,13 +3782,13 @@ class Handler(BaseHTTPRequestHandler):
                     if (r.get("id") or "+".join(r.get("conds") or [])) == rid:
                         r["on"] = on
                 store.set_auto_insider_rules(rules)
-                self._to("/gateway?msg=" + quote("已启用规则" if on else "已停用规则")); return
+                self._to("/gateway?tab=rules&msg=" + quote("已启用规则" if on else "已停用规则")); return
             if path == "/gateway/rule-del":
                 rid = formq.get("id", [""])[0]
                 rules = [r for r in store.get_auto_insider_rules()
                          if (r.get("id") or "+".join(r.get("conds") or [])) != rid]
                 store.set_auto_insider_rules(rules)
-                self._to("/gateway?msg=" + quote("规则已删除")); return
+                self._to("/gateway?tab=rules&msg=" + quote("规则已删除")); return
             if path == "/settings/sync-scope":
                 on = form.get("paid_only") in ("on", "1", "true")
                 store.set_kv("sync_paid_only", "1" if on else "0")
