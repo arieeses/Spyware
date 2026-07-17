@@ -79,10 +79,40 @@ def scores_stale(store: Store, max_age: int = 300) -> bool:
         return True
 
 
+def flag_prefix_insiders(store: Store) -> int:
+    """特征库邮箱前缀命中的账号自动移入内鬼库(其 token 进网关 feed → 网关拦截发假)。
+    开关 kv auto_prefix_insider(默认开=1)。返回本轮新增数。"""
+    if store.get_kv("auto_prefix_insider", "1") != "1":
+        return 0
+    prefixes = [r["value"] for r in store.list_signatures() if r["kind"] == "email" and r["value"]]
+    if not prefixes:
+        return 0
+    from .asn import get_asndb
+    asndb = get_asndb()
+    n = 0
+    for m in store.users_matching_email_prefixes(prefixes):   # 已排除已在内鬼库的
+        tok = m["token"]
+        pulls = list(store.pulls_for(tok))
+        ips = sorted({p["ip"] for p in pulls if p["ip"]})
+        uas = sorted({p["ua"] for p in pulls if p["ua"]})
+        asns = sorted({asndb.lookup(ip)[0] for ip in ips
+                       if asndb and asndb.lookup(ip)[0]}) if asndb else []
+        store.add_insider(tok, email=m["email"], panel=m["panel"], ips=ips, uas=uas,
+                          asns=list(asns), tags=store.score_tags(tok))
+        n += 1
+    if n:
+        try:
+            store.add_runlog("prefix", "前缀自动入库", True, f"邮箱前缀命中自动移入内鬼库 {n} 个")
+        except Exception:  # noqa: BLE001
+            pass
+    return n
+
+
 def recompute_scores(store: Store, cfg: Config = None) -> int:
     """全量评分并物化进 scores 表。后台(调度线程)调用, 不阻塞页面请求。"""
     with _RECOMPUTE_LOCK:
         cfg = cfg or load_config(store)
+        flag_prefix_insiders(store)             # 前缀命中账号自动入库(评分前, 好排除出名单)
         fp = scores_fingerprint(store)          # 先取指纹, 期间若又变化下轮再算
         results = _analyze(store, cfg)
         store.replace_scores([_score_row(r) for r in results])
