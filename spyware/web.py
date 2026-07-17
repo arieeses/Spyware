@@ -1316,14 +1316,26 @@ _IMPFEAT_JS = """<script>
 function _impEsc(s){return String(s).replace(/[&<>\"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c];});}
 function _impGrp(title, name, vals, warn){
   if(!vals || !vals.length) return '';
-  var h='<div style=\"margin:10px 0 4px;font-weight:600\">'+title+(warn?' <span style=\"color:#e5484d;font-weight:400;font-size:12px\">'+warn+'</span>':'')+
-        ' <a href=\"#\" onclick=\"_impTgl(this);return false\" style=\"font-weight:400;font-size:12px;margin-left:6px\">全选/全不选</a></div>';
+  var gid='impg_'+name;
+  var h='<div style=\"margin:12px 0 0;font-weight:600\">'+title+
+        ' <span class=\"dim\" style=\"font-weight:400;font-size:12px\">('+vals.length+'项)</span>'+
+        (warn?' <span style=\"color:#e5484d;font-weight:400;font-size:12px\">'+warn+'</span>':'')+
+        ' <a href=\"#\" onclick=\"_impTgl(this);return false\" style=\"font-weight:400;font-size:12px;margin-left:6px\">全选/全不选</a>'+
+        ' <a href=\"#\" onclick=\"_impExpand(this,\\''+gid+'\\');return false\" style=\"font-weight:400;font-size:12px;margin-left:6px\">展开</a></div>';
+  h+='<div id=\"'+gid+'\" class=\"impbox\" style=\"display:none\">';
   h+='<div style=\"display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:2px 12px\">';
   vals.forEach(function(v){
     h+='<label style=\"display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis\"><input type=\"checkbox\" name=\"'+name+'\" value=\"'+_impEsc(v)+'\"> '+_impEsc(v)+'</label>';
   });
-  h+='</div>';
+  h+='</div></div>';
   return h;
+}
+function _impExpand(a, gid){
+  var b=document.getElementById(gid);
+  if(!b) return;
+  var show = b.style.display==='none';
+  b.style.display = show ? 'block' : 'none';
+  a.textContent = show ? '收起' : '展开';
 }
 function impFeat(token){
   var d = token ? _INS_FEAT[token] : _INS_FEAT_ALL;
@@ -2589,9 +2601,16 @@ def layout(active: str, title: str, content: str, admin_name: str = "") -> str:
   .modalx {{ position:absolute; top:10px; right:12px; width:30px; height:30px; border:0; background:transparent;
     font-size:22px; line-height:1; color:#98a0ab; cursor:pointer; border-radius:6px; z-index:2; }}
   .modalx:hover {{ background:#eceff3; color:#333; }}
-  /* 滚动放内层(外框圆角完整); 隐藏滚动条但仍可滚(滚轮/触控板/拖动内容) */
-  .modalscroll {{ max-height:74vh; overflow-y:auto; overflow-x:hidden; scrollbar-width:none; -ms-overflow-style:none; }}
-  .modalscroll::-webkit-scrollbar {{ width:0; height:0; }}
+  /* 滚动放内层(外框圆角完整); 滚动条常显, 方便看清还有多少内容 */
+  .modalscroll {{ max-height:74vh; overflow-y:auto; overflow-x:hidden; }}
+  /* 弹窗/滚动框内的滚动条: 常显、细、主题色 */
+  .modal, .modalscroll, .impbox {{ scrollbar-width:thin; scrollbar-color:#b9c1cd transparent; }}
+  .modal::-webkit-scrollbar, .modalscroll::-webkit-scrollbar, .impbox::-webkit-scrollbar {{ width:10px; height:10px; }}
+  .modal::-webkit-scrollbar-thumb, .modalscroll::-webkit-scrollbar-thumb, .impbox::-webkit-scrollbar-thumb {{ background:#c2c9d4; border-radius:6px; border:2px solid var(--card); }}
+  .modal::-webkit-scrollbar-thumb:hover, .modalscroll::-webkit-scrollbar-thumb:hover, .impbox::-webkit-scrollbar-thumb:hover {{ background:#a3adbb; }}
+  .modal::-webkit-scrollbar-track, .modalscroll::-webkit-scrollbar-track, .impbox::-webkit-scrollbar-track {{ background:transparent; }}
+  /* 导入弹窗每类特征: 展开后落在定高滚动框 */
+  .impbox {{ max-height:240px; overflow-y:auto; overflow-x:hidden; margin-top:6px; border:1px solid var(--line); border-radius:6px; padding:8px 10px; }}
   @media (max-width:560px) {{ .udgrid {{ grid-template-columns:1fr; }} }}
   .pager {{ display:flex; gap:4px; align-items:center; justify-content:flex-end; margin-top:14px; flex-wrap:wrap; }}
   .pg {{ min-width:30px; height:30px; padding:0 8px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:6px; text-decoration:none; color:var(--txt); font-size:13px; }}
