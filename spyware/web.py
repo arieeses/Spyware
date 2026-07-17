@@ -2187,6 +2187,7 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
         poll = max(5, min(3600, int(store.get_kv("gateway_poll_interval", "30") or 30)))
     except (ValueError, TypeError):
         poll = 30
+    feed_on = (store.get_kv("gateway_feed_enabled", "1") == "1") if store else True
     rules = store.get_auto_insider_rules() if store else []
     try:
         hist = _json.loads(store.get_kv("feat_kind_hist", "") or "{}") if store else {}
@@ -2257,6 +2258,10 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
     feed_tab = f"""
     <div class="card">
       <div class="card-title">网关联动 · Feed</div>
+      <form method="post" action="/gateway/feed-toggle" class="autoform" style="margin-bottom:10px">
+        <label class="switch" style="margin-right:8px"><input type="checkbox" name="on" {'checked' if feed_on else ''} onchange="this.form.submit()"><span class="track"></span></label>
+        <span><b>{'已启用下发' if feed_on else '已暂停下发'}</b>——{'网关正常拉到拦截名单' if feed_on else '网关拉到的是空名单, 相当于暂停 spyware 侧全部拦截'}</span>
+      </form>
       <div class="dim small" style="margin-bottom:10px">
         订阅网关每 {poll}s 拉此接口, 取<b>特征库 + 内鬼库</b>里的 IP · ASN · UA · token(邮箱前缀已在本系统翻译成 token)。
         网关据此对命中的订阅请求<b>发假节点</b>——优先级高于白名单, 已确诊账号即便来自白名单 IP 也发假。
@@ -2941,6 +2946,12 @@ class Handler(BaseHTTPRequestHandler):
                 fk = store.get_kv("gateway_feed_key", "")
                 if not fk or q.get("key", [""])[0] != fk:
                     self._send(b'{"error":"invalid key"}', "application/json; charset=utf-8"); return
+                if store.get_kv("gateway_feed_enabled", "1") != "1":
+                    # 开关关闭: 下发空名单(网关随之清空 spyware 侧拦截, 等于暂停)
+                    self._send(json.dumps({"enabled": False, "ips": [], "asns": [], "uas": [], "tokens": [],
+                                           "counts": {"ips": 0, "asns": 0, "uas": 0, "tokens": 0}}).encode(),
+                               "application/json; charset=utf-8")
+                    return
                 sigs = store.list_signatures()
                 ips = sorted({r["value"] for r in sigs if r["kind"] == "ip" and r["value"]})
                 uas = sorted({r["value"] for r in sigs if r["kind"] == "ua" and r["value"]})
@@ -3756,6 +3767,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._to("/gateway?err=" + quote("间隔需为 5–3600 的整数")); return
                 store.set_kv("gateway_poll_interval", str(sec))
                 self._to("/gateway?msg=" + quote(f"轮询间隔已设为 {sec}s, 记得同步网关配置")); return
+            if path == "/gateway/feed-toggle":
+                on = formq.get("on", [""])[0] in ("on", "1", "true")
+                store.set_kv("gateway_feed_enabled", "1" if on else "0")
+                self._to("/gateway?msg=" + quote(
+                    "已启用下发: 网关下次拉取即恢复拦截名单"
+                    if on else "已暂停下发: 网关下次拉取拿到空名单, spyware 侧拦截暂停")); return
             if path == "/gateway/rule-add":
                 conds = sorted({c for c in formq.get("c", []) if c in store._VALID_COND})
                 if not conds:
