@@ -1,0 +1,23 @@
+{
+  "name": "sub-gateway",
+  "version": "1.0.0",
+  "description": "订阅网关 - 防探测反向代理，正常用户返回真订阅，风险用户返回假订阅",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test",
+    "clickhouse:up": "docker compose -f docker-compose.clickhouse.yml up -d",
+    "clickhouse:init": "node scripts/init-clickhouse.js",
+    "clickhouse:check": "node scripts/check-clickhouse.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ipaddr.js": "^2.2.0",
+    "js-yaml": "^4.1.0",
+    "maxmind": "^4.3.24"
+  }
+}

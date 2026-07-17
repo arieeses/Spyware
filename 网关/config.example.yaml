@@ -1,0 +1,225 @@
+# ============================================================
+# sub-gateway 生产配置模板
+# 每个功能开关的含义、可选值、开/关影响见下方注释。
+# ============================================================
+
+server:
+  # 对外监听。多种写法任选：
+  #   1) 单端口:     listen: "0.0.0.0:8443"                 用下方 server.tls
+  #   2) 多端口:     listen: ["0.0.0.0:80", "0.0.0.0:8443"]  共用 server.tls
+  #   3) 端口区间:   listen: "0.0.0.0:36001-36008"           展开为 8 个端口, 共用 server.tls
+  #   4) 每端口独立 TLS: 用 listeners（见下方示例, addr 也支持区间）
+  # 支持 IPv6: "[::]:8443"；端口 0 = 系统自动分配空闲端口
+  listen: "0.0.0.0:8443"
+
+  # 【多组端口 + HTTP/HTTPS 混合示例】取消注释即启用；启用 listeners 时上面的 listen 被忽略。
+  # 例：HTTP 36001-36008 明文 + HTTPS 35001-35008（35001-35008 组省略 tls 则继承 server.tls）
+  # listeners:
+  #   - addr: "0.0.0.0:36001-36008"
+  #     tls:
+  #       enabled: false
+  #   - addr: "0.0.0.0:35001-35008"
+  #     tls:
+  #       enabled: true
+  #       cert_path: "./certs/server.crt"
+  #       key_path: "./certs/server.key"
+
+  # 【开关】拒绝直连
+  #   true  = 只接受 trusted_proxies 里的来源，其它直连一律 403（生产必开）
+  #   false = 允许任意来源直连，直连时 client_ip 取 remote_addr（仅本地调试用）
+  reject_direct_access: true
+
+  # 回源超时（秒）。源站超过该时间未响应按失败处理，见 origin_failure_mode
+  origin_timeout_seconds: 10
+
+  # 回源响应体最大字节数，超出即中断并按回源失败处理（防超大响应打爆内存）
+  max_origin_response_bytes: 5242880   # 5 MB
+
+  # 【开关】允许的 HTTP 方法白名单。不在列表内的方法直接 405
+  allowed_methods: ["GET", "HEAD"]
+
+  tls:
+    # 【开关】对外 TLS
+    #   true  = 网关自身用 HTTPS 监听（需下方 IP 证书），反代 HTTPS 回源
+    #   false = 纯 HTTP 监听（token/真实 IP 明文传输，仅本地或可信内网可用）
+    enabled: true
+    cert_path: "./certs/server.crt"   # IP 证书（enabled=true 时必填且文件须存在）
+    key_path: "./certs/server.key"    # 私钥
+
+  # 【开关】内部接口监听地址（仅绑本机，承载 /-/health /-/ready /-/reload）
+  #   留空 = 完全不启动内部接口
+  #   不套用 reject_direct_access，绝不要绑到公网地址
+  internal_listen: "127.0.0.1:8081"
+
+  # /-/reload 热重载接口的 Bearer Token，务必换成长随机串
+  reload_token: "CHANGE_ME_LONG_RANDOM"
+
+# 可信代理来源（单 IP 或 CIDR）。只有来自这里的请求，其 X-Real-IP /
+# X-Forwarded-For 转发头才会被信任。填阿里云反代公网 IP 或出口网段。
+trusted_proxies:
+  - "203.0.113.10"
+  - "203.0.113.0/24"
+
+# 【开关/模式】回源失败（超时/连接错误/响应过大）时的行为
+#   "fake"  = 返回假订阅，不暴露"这是网关"（推荐，隐蔽）
+#   "error" = 返回 502 Bad Gateway（便于排障，但会暴露网关存在）
+origin_failure_mode: "fake"
+
+rate_limit:
+  # 【开关】按 client_ip 的令牌桶限流
+  #   true  = 启用，防止扫描器高频探测
+  #   false = 不限流
+  enabled: true
+  requests_per_minute: 120   # 稳态每分钟允许的请求数（令牌补充速率）
+  burst: 40                  # 突发桶容量，短时间可连续放行的上限
+
+fake_latency:
+  # 【开关】假订阅随机延迟（抗时序探测）
+  #   true  = 返回假订阅前随机等待 min_ms~max_ms，模拟真实回源耗时，
+  #           使真/假订阅在响应时延上难以区分
+  #   false = 立即返回（真订阅要回源、假订阅秒回，时延差异可被探测）
+  enabled: true
+  min_ms: 80
+  max_ms: 300
+
+# 【模式】私有/保留地址（RFC1918 / 127.x / 100.64/10 CGNAT / IPv6 ULA 等）判定
+#   "fake"      = 返回假订阅（推荐，此类地址不该是正常订阅用户）
+#   "proxy"     = 当正常用户放行回源
+#   "allowlist" = 视同白名单放行
+private_ip_decision: "fake"
+
+# 源站路由表：请求 Host -> 源站 base_url。未命中的 Host 返回 404
+origins:
+  site1.example.com:
+    tenant_id: "site1"
+    base_url: "https://ep1.xxx.cyou"
+    decoy_host: "bait1.example.com"
+    analytics_paths:
+      - "/api/baidu/baidu/baidu"
+  site2.example.com:
+    tenant_id: "site2"
+    base_url: "https://ep2.xxx.cyou"
+    decoy_host: "bait2.example.com"
+    analytics_paths:
+      - "/api/v1/client/subscribe"
+
+analytics:
+  enabled: false
+  flush_interval_ms: 1000
+  batch_size: 1000
+  max_queue_size: 100000
+  spool_dir: "./data/analytics_spool"
+  clickhouse:
+    url: "http://127.0.0.1:8123"
+    database: "sub_gateway"
+    table: "subscription_access_events"
+    username: "default"
+    password: ""
+
+suspicious_ip:
+  enabled: false
+  refresh_interval_seconds: 30
+  table: "global_suspicious_ips"
+  # clickhouse 留空时复用 analytics.clickhouse
+
+# 白名单：命中 ip / cidr / asn 任一，永远返回真订阅（优先级高于所有阻断）。
+# 只放管理员/测试/固定住宅出口，切勿把整个云厂商 ASN 加进来。
+allowlist:
+  ips:
+    - "198.51.100.20"
+  cidrs:
+    - "198.51.100.0/24"
+  asns:
+    - 4134
+
+cloud_detection:
+  geoip:
+    # 【开关】GeoLite2 ASN 检测（主检测手段）
+    #   true  = 启动时加载 mmdb（文件须存在），每请求本地查 ASN
+    #   false = 跳过 ASN 检测，只靠下面的 CIDR 兜底
+    enabled: true
+    db_path: "./data/GeoLite2-ASN.mmdb"
+
+    # 按 ASN 号码拦截（最精确，抗机房改名换马甲）。命中即假订阅
+    block_asns:
+      - 16509    # Amazon AWS
+      - 8075     # Microsoft
+      - 15169    # Google
+      - 45102    # Alibaba
+      - 132203   # Tencent
+
+    # 按 ASN 组织名关键词拦截（兜底，不区分大小写）。命中即假订阅
+    block_asn_keywords:
+      - "Alibaba"
+      - "Aliyun"
+      - "Amazon"
+      - "AWS"
+      - "Microsoft"
+      - "Azure"
+      - "Google"
+      - "GCP"
+      - "Tencent"
+      - "Oracle"
+      - "DigitalOcean"
+      - "Linode"
+      - "Hetzner"
+      - "Vultr"
+      - "OVH"
+  cidr:
+    # 【开关】CIDR 兜底检测（GeoLite2 之后的补充）
+    #   true  = 启动时加载下列网段文件，逐个匹配
+    #   false = 不做 CIDR 兜底
+    enabled: true
+    files:
+      - "./data/cloud_ipv4.txt"
+      - "./data/cloud_ipv6.txt"
+
+# 假订阅元信息（抗探测，使响应头与真订阅不可区分）
+fake_subscription:
+  # 【开关】真实 subscription-userinfo：节点是假的，但到期/流量取真实值。
+  #   enabled=true 时，风险用户命中后网关用其 token 向源站拉一次 subscription-userinfo 头
+  #   （只取头、不下载节点、不暴露真实节点给扫描器），使客户端显示的到期时间/流量为真。
+  #   拿不到时回退下方静态 userinfo。带按 token 缓存，避免高频探测打爆源站。
+  real_userinfo:
+    enabled: true
+    cache_ttl_seconds: 300      # 真实值缓存时长
+    timeout_seconds: 5          # 拉取源站头的超时
+  # 静态兜底 userinfo（real_userinfo 关闭或拉取失败时用），写进 subscription-userinfo 头
+  userinfo:
+    upload: 123456789
+    download: 987654321
+    total: 107374182400
+    expire: 0                                         # 0 = 不过期
+  profile_update_interval: 24                         # 写进 profile-update-interval 头（小时）
+  filename: "subscribe"                               # content-disposition 文件名
+
+# 假节点列表：风险用户命中后，根据其客户端 UA/flag 渲染成对应客户端原生格式
+# （Clash/Sing-box/Surge/Surfboard/Loon/QuantumultX/Shadowrocket/base64）。
+# 至少 1 个节点；type: vmess / vless / trojan / shadowsocks(ss)。填假地址假凭据，勿用真实源站。
+fake_nodes:
+  - name: "香港 01"
+    type: "vmess"
+    host: "hk1.example.com"
+    port: 443
+    uuid: "00000000-0000-0000-0000-000000000000"
+    network: "ws"
+    tls: true
+    sni: "hk1.example.com"
+    path: "/ws"
+    host_header: "hk1.example.com"
+  - name: "日本 01"
+    type: "trojan"
+    host: "jp1.example.com"
+    port: 443
+    password: "fake-password"
+    network: "tcp"
+    tls: true
+    sni: "jp1.example.com"
+    allow_insecure: false
+  - name: "新加坡 01"
+    type: "shadowsocks"
+    host: "sg1.example.com"
+    port: 443
+    cipher: "aes-128-gcm"
+    password: "fake-password"
+    network: "tcp"

@@ -648,6 +648,17 @@ class Store:
     def insider_tokens(self) -> set:
         return {r["token"] for r in self.conn.execute("SELECT token FROM insiders").fetchall()}
 
+    def tokens_by_email_substrings(self, subs) -> set:
+        """邮箱前缀/关键词(子串)命中的 token 集合。供网关 feed 把邮箱前缀翻译成 token。"""
+        subs = [s.strip().lower() for s in (subs or []) if s and s.strip()]
+        out = set()
+        for s in subs:
+            for r in self.conn.execute(
+                    "SELECT token FROM users WHERE email IS NOT NULL AND lower(email) LIKE ?",
+                    (f"%{s}%",)):
+                out.add(r["token"])
+        return out
+
     def ip_panel_map(self) -> dict:
         """每个拉取 IP 出现在哪些面板(src)。用于「跨面板同IP」信号。"""
         out: dict = {}

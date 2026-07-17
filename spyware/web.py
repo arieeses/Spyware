@@ -2162,11 +2162,25 @@ def render_settings(admin, msg="", err="", store=None) -> str:
       <div class="dim small" style="margin-top:8px">开启后: 同步只拉有套餐或有到期时间的用户, 并<b>清除本地已同步的"从未购买"用户</b>——
       大幅减小数据量、面板更快。有拉取记录的用户仍会出现在风险名单(通过日志), 不受影响。改后请到「运行控制」重新同步。</div>
     </div>"""
+    feed_key = store.get_kv("gateway_feed_key", "") if store else ""
+    feed_line = (f'<div class="dim small">拉取地址: <code>/api/gateway_feed?key={esc(feed_key)}</code>'
+                 f'(给网关配这个)</div>' if feed_key else '<div class="dim small">尚未生成密钥</div>')
+    gw_card = f"""
+    <div class="card">
+      <div class="card-title">网关联动 · Feed</div>
+      <div class="dim small" style="margin-bottom:8px">网关每 30s 拉此接口, 取<b>特征库/内鬼库</b>的 IP·ASN·UA·token(邮箱前缀已翻译成 token)去发假。给网关配下面的 URL + 密钥。</div>
+      {feed_line}
+      <form method="post" action="/settings/gateway-key" style="margin-top:10px"
+            onsubmit="return confirm('重新生成会使旧密钥失效, 网关需同步更新')">
+        <button class="btn ghost">{'重新生成密钥' if feed_key else '生成密钥'}</button>
+      </form>
+    </div>"""
     return f"""{_card_alert(msg, err)}
     {paid_card}
     <div class="card">
       {_asn_db_card()}
     </div>
+    {gw_card}
     <div class="card">
       <div class="card-title">数据库 / 迁移</div>
       <table class="grid"><tbody>
@@ -2738,6 +2752,24 @@ class Handler(BaseHTTPRequestHandler):
                 body = json.dumps(decide(store, tok) if tok else {"error": "missing token"},
                                   ensure_ascii=False).encode()
                 self._send(body, "application/json; charset=utf-8")
+                return
+
+            if path == "/api/gateway_feed":
+                # 网关拉取: 从特征库/内鬼库吐出 {ips, asns, uas, tokens}(邮箱前缀已翻译成token)
+                fk = store.get_kv("gateway_feed_key", "")
+                if not fk or q.get("key", [""])[0] != fk:
+                    self._send(b'{"error":"invalid key"}', "application/json; charset=utf-8"); return
+                sigs = store.list_signatures()
+                ips = sorted({r["value"] for r in sigs if r["kind"] == "ip" and r["value"]})
+                uas = sorted({r["value"] for r in sigs if r["kind"] == "ua" and r["value"]})
+                asns = sorted({int(re.sub(r"(?i)^as", "", (r["value"] or "").strip()))
+                               for r in sigs if r["kind"] == "asn"
+                               and re.sub(r"(?i)^as", "", (r["value"] or "").strip()).isdigit()})
+                emails = [r["value"] for r in sigs if r["kind"] == "email" and r["value"]]
+                tokens = sorted(store.insider_tokens() | store.tokens_by_email_substrings(emails))
+                out = {"ips": ips, "asns": asns, "uas": uas, "tokens": tokens,
+                       "counts": {"ips": len(ips), "asns": len(asns), "uas": len(uas), "tokens": len(tokens)}}
+                self._send(json.dumps(out, ensure_ascii=False).encode(), "application/json; charset=utf-8")
                 return
 
             n_admin = store.admin_count()
@@ -3565,6 +3597,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._back(); return
             if path == "/nodes/delete":
                 store.delete_entity(int(form["id"])); self._back(); return
+            if path == "/settings/gateway-key":
+                store.set_kv("gateway_feed_key", secrets.token_hex(16))
+                self._to("/settings?msg=" + quote("网关 Feed 密钥已生成, 去网关侧配置")); return
             if path == "/settings/sync-scope":
                 on = form.get("paid_only") in ("on", "1", "true")
                 store.set_kv("sync_paid_only", "1" if on else "0")

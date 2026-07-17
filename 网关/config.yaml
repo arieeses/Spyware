@@ -1,0 +1,162 @@
+# ============================================================
+# sub-gateway 本地开发配置（可直接 npm start 运行）
+# 生产部署请用 config.example.yaml：开启 TLS(IP 证书) 与 GeoLite2。
+# 每个功能开关的含义见下方【开关】注释。
+# ============================================================
+
+server:
+  # 对外监听 host:port。多端口写法见 config.example.yaml：
+  #   listen: ["127.0.0.1:8080", "127.0.0.1:8082"]   或   listeners: [...]
+  listen: "127.0.0.1:1919"
+
+  # 【开关】拒绝直连
+  #   true  = 只接受 trusted_proxies 来源，其它直连 403（生产必开）
+  #   false = 允许任意来源直连（本地开发用，取 remote_addr 作 client_ip）
+  reject_direct_access: true
+
+  # 回源超时（秒），超时按回源失败处理
+  origin_timeout_seconds: 10
+
+  # 回源响应体最大字节数，超出即中断
+  max_origin_response_bytes: 5242880   # 5 MB
+
+  # 【开关】允许的 HTTP 方法白名单，不在列表内返回 405
+  allowed_methods: ["GET", "HEAD"]
+
+  tls:
+    # 【开关】对外 TLS
+    #   true  = HTTPS 监听（需 IP 证书），false = 纯 HTTP 监听
+    #   本地开发用 HTTP；生产改 true 并配置证书
+    enabled: false
+    # cert_path: "./certs/server.crt"   # enabled=true 时启用
+    # key_path: "./certs/server.key"
+
+  # 【开关】内部接口监听（仅本机；留空则不启动内部接口）
+  #   承载 /-/health /-/ready /-/reload，不套用 reject_direct_access
+  internal_listen: "127.0.0.1:8081"
+
+  # /-/reload 热重载接口 Bearer Token（生产务必换长随机串）
+  reload_token: "dev-reload-token"
+
+# 可信代理来源（单 IP 或 CIDR）。仅这些来源的转发头被信任
+trusted_proxies:
+  - "127.0.0.1"
+
+# 【开关/模式】回源失败时的行为
+#   "fake"  = 返回假订阅（隐蔽，推荐）
+#   "error" = 返回 502（便于排障）
+origin_failure_mode: "fake"
+
+rate_limit:
+  # 【开关】按 client_ip 令牌桶限流（true=启用 / false=不限流）
+  enabled: true
+  requests_per_minute: 120   # 稳态每分钟请求数
+  burst: 40                  # 突发桶容量
+
+fake_latency:
+  # 【开关】假订阅随机延迟（抗时序探测）
+  #   true=返回假订阅前随机等待 min_ms~max_ms 模拟回源耗时
+  #   false=立即返回（开发调试方便，但时延差异可被探测）
+  enabled: true
+  min_ms: 80
+  max_ms: 300
+
+# 【模式】私有/保留地址判定：fake（假订阅）/ proxy（放行）/ allowlist（视同白名单）
+private_ip_decision: "fake"
+
+# 源站路由表：Host -> base_url。未命中 Host 返回 404
+origins:
+  test.0318.cyou:
+    base_url: "https://ep.0318.cyou"
+    decoy_host: "lyly.vvoocc.top"
+
+# 白名单：ip/cidr/asn 任一命中永远返回真订阅（优先级最高）
+allowlist:
+  ips: []
+  cidrs: []
+  asns: []
+
+cloud_detection:
+  geoip:
+    # 【开关】GeoLite2 ASN 检测（主检测手段）
+    #   true  = 加载 mmdb 并每请求查 ASN（需提供 GeoLite2-ASN.mmdb）
+    #   false = 跳过 ASN 检测，只靠 CIDR 兜底（本地无 mmdb 时用 false）
+    enabled: true
+    db_path: "./data/GeoLite2-ASN.mmdb"
+    # 按 ASN 号码拦截（最精确）
+    block_asns:
+      - 16509      # Amazon AWS
+      - 8075       # Microsoft
+      - 15169      # Google
+      - 45102      # Alibaba
+      - 132203     # Tencent
+    # 按 ASN 组织名关键词拦截（兜底，不区分大小写）
+    block_asn_keywords:
+      - "Alibaba"
+      - "Aliyun"
+      - "Amazon"
+      - "AWS"
+      - "Microsoft"
+      - "Azure"
+      - "Google"
+      - "GCP"
+      - "Tencent"
+      - "Oracle"
+      - "DigitalOcean"
+      - "Linode"
+      - "Hetzner"
+      - "Vultr"
+      - "OVH"
+  cidr:
+    # 【开关】CIDR 兜底检测（true=加载网段文件匹配 / false=关闭）
+    enabled: true
+    files:
+      - "./data/cloud_ipv4.txt"
+      - "./data/cloud_ipv6.txt"
+
+# 假订阅元信息头（抗探测，与真订阅一致）
+fake_subscription:
+  # 【开关】真实 userinfo：节点假、到期/流量真（向源站拉 subscription-userinfo 头）。
+  # 本地开发默认关闭；生产建议开启（见 config.example.yaml 说明）。
+  real_userinfo:
+    enabled: false
+    cache_ttl_seconds: 300
+    timeout_seconds: 5
+  userinfo:                        # 静态兜底，写进 subscription-userinfo 头
+    upload: 123456789
+    download: 987654321
+    total: 107374182400
+    expire: 0                      # 0 = 不过期
+  profile_update_interval: 24      # 写进 profile-update-interval 头（小时）
+  filename: "subscribe"            # content-disposition 文件名
+
+# 假节点列表：风险用户命中后，按其客户端类型渲染成对应格式的假订阅。
+# 至少 1 个节点；type 支持 vmess / vless / trojan / shadowsocks(ss)。
+# 用假地址/假凭据即可，不要填真实源站。
+fake_nodes:
+  - name: "香港 01"
+    type: "vmess"
+    host: "hk1.example.com"
+    port: 443
+    uuid: "00000000-0000-0000-0000-000000000000"
+    network: "ws"
+    tls: true
+    sni: "hk1.example.com"
+    path: "/ws"
+    host_header: "hk1.example.com"
+  - name: "日本 01"
+    type: "trojan"
+    host: "jp1.example.com"
+    port: 443
+    password: "fake-password"
+    network: "tcp"
+    tls: true
+    sni: "jp1.example.com"
+    allow_insecure: false
+  - name: "新加坡 01"
+    type: "shadowsocks"
+    host: "sg1.example.com"
+    port: 443
+    cipher: "aes-128-gcm"
+    password: "fake-password"
+    network: "tcp"
