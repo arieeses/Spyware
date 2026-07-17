@@ -81,6 +81,7 @@ NAV = [
         ("featlib", "特征库", "/featlib"),
         ("insiders", "内鬼库", "/insiders"),
         ("domains", "入口域名", "/domains"),
+        ("gateway", "网关联动", "/gateway"),
     ]),
     ("运行", [
         ("run", "运行控制", "/run"),
@@ -2148,6 +2149,73 @@ def _update_card() -> str:
     </div>"""
 
 
+def render_gateway(store, msg="", err="") -> str:
+    """网关联动 · Feed 独立页: 密钥 / 前缀自动入库开关 / 当前 feed 内容量 / 网关侧配置示例。"""
+    feed_key = store.get_kv("gateway_feed_key", "") if store else ""
+    auto_pfx = (store.get_kv("auto_prefix_insider", "1") == "1") if store else True
+    # 当前 feed 会下发的量(与 /api/gateway_feed 同源, 便于确认名单已生效)
+    sigs = store.list_signatures() if store else []
+    n_ip = sum(1 for r in sigs if r["kind"] == "ip" and r["value"])
+    n_ua = sum(1 for r in sigs if r["kind"] == "ua" and r["value"])
+    n_asn = sum(1 for r in sigs if r["kind"] == "asn" and r["value"])
+    emails = [r["value"] for r in sigs if r["kind"] == "email" and r["value"]]
+    try:
+        n_tok = len(store.insider_tokens() | store.tokens_by_email_substrings(emails))
+    except Exception:  # noqa: BLE001
+        n_tok = len(store.insider_tokens()) if store else 0
+    host = "你的spyware面板域名"
+    feed_url_full = f"https://{host}/api/gateway_feed?key={esc(feed_key)}" if feed_key else ""
+    feed_line = (f'<div class="mono small" style="word-break:break-all;background:var(--bg);padding:8px 10px;border-radius:6px">'
+                 f'{esc(feed_url_full)}</div>'
+                 if feed_key else '<div class="dim small">尚未生成密钥 —— 点下方按钮生成后, 把地址+密钥配到网关。</div>')
+    yaml_key = esc(feed_key) if feed_key else "上面生成的密钥"
+    yaml_snip = esc(
+        "insider_feed:\n"
+        "  enabled: true\n"
+        f"  url: \"https://{host}/api/gateway_feed\"\n"
+        f"  key: \"{feed_key or '这里填密钥'}\"\n"
+        "  interval_seconds: 30\n"
+        "  timeout_seconds: 5")
+    return f"""{_card_alert(msg, err)}
+    <div class="card">
+      <div class="card-title">网关联动 · Feed</div>
+      <div class="dim small" style="margin-bottom:10px">
+        订阅网关每 30s 拉此接口, 取<b>特征库 + 内鬼库</b>里的 IP · ASN · UA · token(邮箱前缀已在本系统翻译成 token)。
+        网关据此对命中的订阅请求<b>发假节点</b>——优先级高于白名单, 已确诊账号即便来自白名单 IP 也发假。
+      </div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;margin:14px 0">
+        <div><div class="dim small">token</div><div style="font-size:22px;font-weight:600">{n_tok}</div></div>
+        <div><div class="dim small">IP</div><div style="font-size:22px;font-weight:600">{n_ip}</div></div>
+        <div><div class="dim small">ASN</div><div style="font-size:22px;font-weight:600">{n_asn}</div></div>
+        <div><div class="dim small">UA</div><div style="font-size:22px;font-weight:600">{n_ua}</div></div>
+      </div>
+      <div class="dim small" style="margin-bottom:6px">拉取地址(给网关配):</div>
+      {feed_line}
+      <form method="post" action="/gateway/key" style="margin-top:12px"
+            onsubmit="return confirm('重新生成会使旧密钥失效, 网关需同步更新')">
+        <button class="btn ghost">{'重新生成密钥' if feed_key else '生成密钥'}</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-title">邮箱前缀自动入库</div>
+      <form method="post" action="/gateway/auto-prefix" class="autoform">
+        <label class="switch" style="margin-right:8px"><input type="checkbox" name="on" {'checked' if auto_pfx else ''} onchange="this.form.submit()"><span class="track"></span></label>
+        <span>邮箱前缀命中特征库时<b>自动移入内鬼库</b>(其 token 随 feed 下发给网关拦截)</span>
+      </form>
+      <div class="dim small" style="margin-top:8px">
+        开启后: 每次重算把<b>邮箱命中特征库前缀</b>的账号自动移进内鬼库(注册即抓, 无需人工审)。
+        前缀请在<a href="/featlib">特征库</a>登记有辨识度的串, <b>别用通用词</b>以免误伤正常用户。
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">网关侧配置示例</div>
+      <div class="dim small" style="margin-bottom:6px">把下面这段贴进网关 <code>config.yaml</code>, 然后 reload 网关(<code>kill -HUP</code> 或 /-/reload):</div>
+      <pre class="mono small" style="background:var(--bg);padding:10px 12px;border-radius:6px;overflow:auto">{yaml_snip}</pre>
+    </div>"""
+
+
 def render_settings(admin, msg="", err="", store=None) -> str:
     dbp = CONFIG.db_path
     size_mb = (os.path.getsize(dbp) / 1048576) if os.path.exists(dbp) else 0
@@ -2162,31 +2230,11 @@ def render_settings(admin, msg="", err="", store=None) -> str:
       <div class="dim small" style="margin-top:8px">开启后: 同步只拉有套餐或有到期时间的用户, 并<b>清除本地已同步的"从未购买"用户</b>——
       大幅减小数据量、面板更快。有拉取记录的用户仍会出现在风险名单(通过日志), 不受影响。改后请到「运行控制」重新同步。</div>
     </div>"""
-    feed_key = store.get_kv("gateway_feed_key", "") if store else ""
-    auto_pfx = (store.get_kv("auto_prefix_insider", "1") == "1") if store else True
-    feed_line = (f'<div class="dim small">拉取地址: <code>/api/gateway_feed?key={esc(feed_key)}</code>'
-                 f'(给网关配这个)</div>' if feed_key else '<div class="dim small">尚未生成密钥</div>')
-    gw_card = f"""
-    <div class="card">
-      <div class="card-title">网关联动 · Feed</div>
-      <div class="dim small" style="margin-bottom:8px">网关每 30s 拉此接口, 取<b>特征库/内鬼库</b>的 IP·ASN·UA·token(邮箱前缀已翻译成 token)去发假。给网关配下面的 URL + 密钥。</div>
-      {feed_line}
-      <form method="post" action="/settings/gateway-key" style="margin-top:10px"
-            onsubmit="return confirm('重新生成会使旧密钥失效, 网关需同步更新')">
-        <button class="btn ghost">{'重新生成密钥' if feed_key else '生成密钥'}</button>
-      </form>
-      <form method="post" action="/settings/auto-prefix" class="autoform" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-        <label class="switch" style="margin-right:8px"><input type="checkbox" name="on" {'checked' if auto_pfx else ''} onchange="this.form.submit()"><span class="track"></span></label>
-        <span>邮箱前缀命中<b>自动移入内鬼库</b>(其 token 随 feed 下发给网关拦截)</span>
-        <div class="dim small" style="margin-top:6px">开启后: 每次重算把<b>邮箱命中特征库前缀</b>的账号自动移进内鬼库(注册即抓, 无需人工审)。前缀请在特征库登记有辨识度的串, 别用通用词以免误伤。</div>
-      </form>
-    </div>"""
     return f"""{_card_alert(msg, err)}
     {paid_card}
     <div class="card">
       {_asn_db_card()}
     </div>
-    {gw_card}
     <div class="card">
       <div class="card-title">数据库 / 迁移</div>
       <table class="grid"><tbody>
@@ -2661,6 +2709,7 @@ VIEWS = {
     "/featlib": ("featlib", "特征库"),
     "/insiders": ("insiders", "内鬼库"),
     "/domains": ("domains", "入口域名"),
+    "/gateway": ("gateway", "网关联动"),
     "/run": ("run", "运行控制"),
     "/runlog": ("runlog", "运行日志"),
     "/settings": ("settings", "系统设置"),
@@ -2984,6 +3033,8 @@ class Handler(BaseHTTPRequestHandler):
             elif active == "domains":
                 content = render_domains(store, q.get("panel", [""])[0], q.get("tier", [""])[0],
                                          q.get("msg", [""])[0], q.get("err", [""])[0])
+            elif active == "gateway":
+                content = render_gateway(store, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "settings":
                 content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0], store=store)
             elif active == "logstore":
@@ -3603,13 +3654,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._back(); return
             if path == "/nodes/delete":
                 store.delete_entity(int(form["id"])); self._back(); return
-            if path == "/settings/gateway-key":
+            if path == "/gateway/key":
                 store.set_kv("gateway_feed_key", secrets.token_hex(16))
-                self._to("/settings?msg=" + quote("网关 Feed 密钥已生成, 去网关侧配置")); return
-            if path == "/settings/auto-prefix":
+                self._to("/gateway?msg=" + quote("网关 Feed 密钥已生成, 去网关侧配置")); return
+            if path == "/gateway/auto-prefix":
                 on = formq.get("on", [""])[0] in ("on", "1", "true")
                 store.set_kv("auto_prefix_insider", "1" if on else "0")
-                self._to("/settings?msg=" + quote(
+                self._to("/gateway?msg=" + quote(
                     "已开启: 邮箱前缀命中自动移入内鬼库" if on else "已关闭: 前缀命中不再自动入库")); return
             if path == "/settings/sync-scope":
                 on = form.get("paid_only") in ("on", "1", "true")
