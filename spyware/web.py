@@ -2149,7 +2149,7 @@ def _update_card() -> str:
     </div>"""
 
 
-_COND_CN = {"email": "邮箱前缀", "ip": "IP", "ua": "UA", "asn": "机房ASN"}
+_COND_CN = {"email": "邮箱前缀", "ip": "精确IP", "subnet": "网段", "ua": "UA", "asn": "机房ASN"}
 
 
 def _rule_preview(hist: dict, conds) -> int:
@@ -2167,6 +2167,10 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
     """网关联动页: 两个标签页 —— 网关联动(Feed+密钥+配置示例) / 自动入库(规则)。"""
     import json as _json
     feed_key = store.get_kv("gateway_feed_key", "") if store else ""
+    try:
+        poll = max(5, min(3600, int(store.get_kv("gateway_poll_interval", "30") or 30)))
+    except (ValueError, TypeError):
+        poll = 30
     rules = store.get_auto_insider_rules() if store else []
     try:
         hist = _json.loads(store.get_kv("feat_kind_hist", "") or "{}") if store else {}
@@ -2182,26 +2186,19 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
             sep = ' <span class="dim">且</span> '
             chips = sep.join(f'<span class="chip">{esc(_COND_CN.get(c, c))}</span>' for c in conds)
             hit = _rule_preview(hist, conds)
-            # 3.8 安全: 带引号/中文的 onsubmit 在 f-string 外拼好
-            if on:
-                toggle_guard = "return true"
-            else:
-                toggle_guard = ("return confirm('启用后下次重算会把命中此规则的 "
-                                + str(hit) + " 个账号移入内鬼库, 确认?')")
-            btn_cls = "" if on else "ghost"
-            btn_txt = "已启用" if on else "启用"
-            next_on = "0" if on else "1"
+            checked = "checked" if on else ""
             rows.append(f"""
             <tr>
+              <td style="width:44px">
+                <form method="post" action="/gateway/rule-toggle" style="display:inline">
+                  <input type="hidden" name="id" value="{esc(rid)}">
+                  <input type="hidden" name="on" value="{'1' if on else '0'}">
+                  <label class="switch"><input type="checkbox" {checked} onchange="rtoggle(this,{hit})"><span class="track"></span></label>
+                </form>
+              </td>
               <td>{chips}</td>
               <td class="dim small">命中 <b>{hit}</b> 个账号</td>
               <td style="text-align:right;white-space:nowrap">
-                <form method="post" action="/gateway/rule-toggle" style="display:inline"
-                      onsubmit="{toggle_guard}">
-                  <input type="hidden" name="id" value="{esc(rid)}">
-                  <input type="hidden" name="on" value="{next_on}">
-                  <button class="btn sm {btn_cls}">{btn_txt}</button>
-                </form>
                 <form method="post" action="/gateway/rule-del" style="display:inline"
                       onsubmit="return confirm('删除此规则?')">
                   <input type="hidden" name="id" value="{esc(rid)}">
@@ -2233,7 +2230,7 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
         "  enabled: true\n"
         f"  url: \"https://{host}/api/gateway_feed\"\n"
         f"  key: \"{feed_key or '这里填密钥'}\"\n"
-        "  interval_seconds: 30\n"
+        f"  interval_seconds: {poll}\n"
         "  timeout_seconds: 5")
     tab = "rules" if tab == "rules" else "feed"
     tabbar = (
@@ -2246,7 +2243,7 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
     <div class="card">
       <div class="card-title">网关联动 · Feed</div>
       <div class="dim small" style="margin-bottom:10px">
-        订阅网关每 30s 拉此接口, 取<b>特征库 + 内鬼库</b>里的 IP · ASN · UA · token(邮箱前缀已在本系统翻译成 token)。
+        订阅网关每 {poll}s 拉此接口, 取<b>特征库 + 内鬼库</b>里的 IP · ASN · UA · token(邮箱前缀已在本系统翻译成 token)。
         网关据此对命中的订阅请求<b>发假节点</b>——优先级高于白名单, 已确诊账号即便来自白名单 IP 也发假。
       </div>
       <div style="display:flex;gap:18px;flex-wrap:wrap;margin:14px 0">
@@ -2260,6 +2257,14 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
       <form method="post" action="/gateway/key" style="margin-top:12px"
             onsubmit="return confirm('重新生成会使旧密钥失效, 网关需同步更新')">
         <button class="btn ghost">{'重新生成密钥' if feed_key else '生成密钥'}</button>
+      </form>
+      <form method="post" action="/gateway/interval" class="autoform"
+            style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span>网关轮询间隔</span>
+        <input name="sec" type="number" min="5" max="3600" value="{poll}" required style="width:90px">
+        <span class="dim small">秒(5–3600)</span>
+        <button class="btn sm">保存</button>
+        <span class="dim small">改这里会更新下方配置示例, 复制到网关 config.yaml 后 reload 生效。</span>
       </form>
     </div>
 
@@ -2279,18 +2284,19 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
       {rules_html}
       <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
         <div class="dim small" style="margin-bottom:6px"><b>新建规则</b> · 勾选需要<b>同时命中</b>的特征:</div>
-        <form method="post" action="/gateway/rule-add" id="rulef"
-              onsubmit="return ruleSubmit()">
+        <form method="post" action="/gateway/rule-add" id="rulef">
           <label class="rk"><input type="checkbox" name="c" value="email" onchange="ruleCalc()"> 邮箱前缀</label>
-          <label class="rk"><input type="checkbox" name="c" value="ip" onchange="ruleCalc()"> IP</label>
+          <label class="rk"><input type="checkbox" name="c" value="ip" onchange="ruleCalc()"> 精确IP</label>
+          <label class="rk"><input type="checkbox" name="c" value="subnet" onchange="ruleCalc()"> 网段</label>
           <label class="rk"><input type="checkbox" name="c" value="ua" onchange="ruleCalc()"> UA</label>
           <label class="rk"><input type="checkbox" name="c" value="asn" onchange="ruleCalc()"> 机房ASN</label>
           <span id="rulehint" class="dim small" style="margin-left:8px"></span>
-          <div style="margin-top:10px"><button class="btn sm" id="rulebtn" disabled>新建并启用</button></div>
+          <div style="margin-top:10px"><button class="btn sm" id="rulebtn" disabled>新建规则</button></div>
         </form>
         <div class="dim small" style="margin-top:8px">
-          提示: <b>机房ASN 不能单独成规则</b>(整个机房太宽, 会误伤), 只能和别的特征组合。
-          启用宽规则前请看清"预计命中"数——它会把存量匹配账号一并移入。
+          新建的规则<b>默认关闭</b>, 需手动打开开关才生效——打开时会提示预计命中数。
+          <b>机房ASN 不能单独成规则</b>(整个机房太宽, 会误伤), 只能和别的特征组合。
+          精确IP=特征库里的单个 IP(/32); 网段=特征库里的 CIDR 段。
         </div>
       </div>
     </div>
@@ -2303,12 +2309,16 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
         if (cs.length === 1 && cs[0] === 'asn') {{ btn.disabled = true; hint.textContent = '机房ASN 不能单独成规则'; return 0; }}
         var n = 0;
         for (var k in HIST) {{ var ks = k ? k.split(',') : []; if (cs.every(function(c){{return ks.indexOf(c) >= 0;}})) n += HIST[k]; }}
-        btn.disabled = false; hint.textContent = '预计命中 ' + n + ' 个账号';
+        btn.disabled = false; hint.textContent = '预计命中 ' + n + ' 个账号(新建后默认关闭)';
         return n;
       }}
-      function ruleSubmit() {{
-        var n = ruleCalc();
-        return confirm('新建并启用此规则? 下次重算会把命中的 ' + n + ' 个账号移入内鬼库。');
+      function rtoggle(el, hit) {{
+        if (el.checked && !confirm('启用后下次重算会把命中此规则的 ' + hit + ' 个账号移入内鬼库, 确认?')) {{
+          el.checked = false; return;
+        }}
+        var form = el.form || el.closest('form');
+        form.querySelector('input[name=on]').value = el.checked ? '1' : '0';
+        form.submit();
       }}
     </script>"""
 
@@ -3761,6 +3771,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/gateway/key":
                 store.set_kv("gateway_feed_key", secrets.token_hex(16))
                 self._to("/gateway?msg=" + quote("网关 Feed 密钥已生成, 去网关侧配置")); return
+            if path == "/gateway/interval":
+                try:
+                    sec = max(5, min(3600, int(formq.get("sec", ["30"])[0])))
+                except (ValueError, TypeError):
+                    self._to("/gateway?err=" + quote("间隔需为 5–3600 的整数")); return
+                store.set_kv("gateway_poll_interval", str(sec))
+                self._to("/gateway?msg=" + quote(f"轮询间隔已设为 {sec}s, 记得同步网关配置")); return
             if path == "/gateway/rule-add":
                 conds = sorted({c for c in formq.get("c", []) if c in store._VALID_COND})
                 if not conds:
@@ -3771,9 +3788,9 @@ class Handler(BaseHTTPRequestHandler):
                 rid = "+".join(conds)
                 if any((r.get("id") or "+".join(r.get("conds") or [])) == rid for r in rules):
                     self._to("/gateway?tab=rules&err=" + quote("已存在相同规则")); return
-                rules.append({"id": rid, "conds": conds, "on": True})
+                rules.append({"id": rid, "conds": conds, "on": False})
                 store.set_auto_insider_rules(rules)
-                self._to("/gateway?tab=rules&msg=" + quote("规则已新建并启用, 下次重算生效")); return
+                self._to("/gateway?tab=rules&msg=" + quote("规则已新建(默认关闭), 打开开关后下次重算生效")); return
             if path == "/gateway/rule-toggle":
                 rid = formq.get("id", [""])[0]
                 on = formq.get("on", [""])[0] in ("on", "1", "true")

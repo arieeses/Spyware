@@ -262,7 +262,8 @@ class FeatureLib:
         return ", ".join(hits)
 
     def match_kinds(self, ips, uas, email, asndb=None) -> set:
-        """返回命中的特征"类型"集合: {'ip','asn','ua','email'} 的子集。供自动入库规则判定。"""
+        """返回命中的特征"类型"集合: {'ip','subnet','asn','ua','email'} 的子集。供自动入库规则判定。
+        ip=精确IP(/32 单址命中); subnet=网段(CIDR 段命中)。"""
         kinds = set()
         if self.empty:
             return kinds
@@ -273,8 +274,9 @@ class FeatureLib:
                 continue
             if any(addr in n for n in self.exempt_nets):
                 continue   # 自有IP/反代IP 不算命中
-            if "ip" not in kinds and any(addr in n for n in self.ip_nets):
-                kinds.add("ip")
+            for n in self.ip_nets:
+                if addr in n:
+                    kinds.add("ip" if n.num_addresses == 1 else "subnet")
             if "asn" not in kinds and self.asns and asndb is not None:
                 asn, _ = asndb.lookup(ip)
                 if asn in self.asns:
