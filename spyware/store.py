@@ -504,6 +504,16 @@ class Store:
             "SELECT * FROM pulls WHERE token=? ORDER BY ts", (token,)
         ).fetchall()
 
+    def recent_pulls(self, token: str, limit: int = 15):
+        """最近 N 条拉取(倒序)。详情页只需最近几条, 不必载入该 token 全部拉取。"""
+        return self.conn.execute(
+            "SELECT * FROM pulls WHERE token=? ORDER BY ts DESC LIMIT ?", (token, limit)
+        ).fetchall()
+
+    def get_score(self, token: str):
+        """读单个 token 已物化的评分行(详情页直接用, 免重算)。无则 None。"""
+        return self.conn.execute("SELECT * FROM scores WHERE token=?", (token,)).fetchone()
+
     def user(self, token: str):
         return self.conn.execute("SELECT * FROM users WHERE token=?", (token,)).fetchone()
 

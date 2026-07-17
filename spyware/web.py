@@ -273,27 +273,74 @@ def _human_bytes(n) -> str:
     return f"{n:.1f}PB"
 
 
+def _detail_pulls(store, tok):
+    """详情页只取最近 15 条拉取(带 ASN 标注), 不载入该 token 全部拉取。"""
+    from .enrich import IpClassifier
+    ipc = IpClassifier()
+    return [{"ts": (p["ts"] or "")[:19].replace("T", " "), "ip": p["ip"],
+             "asn": _ip_asn_label(ipc, p["ip"]),
+             "ua": (p["ua"] or "")[:30]} for p in store.recent_pulls(tok, 15)]
+
+
+def _fmt_iso(s):
+    """ISO 字符串 → 'YYYY-MM-DD HH:MM'(物化行里存的是 isoformat)。"""
+    if not s:
+        return None
+    return str(s)[:16].replace("T", " ")
+
+
 def _user_detail(store, tok: str) -> dict:
-    from .enrich import Blacklist, IpClassifier, UaClassifier
+    # 快路径: 直接读已物化的评分行(recompute 早算好), 不再重算 + 不做全表扫描。
+    row = store.get_score(tok)
+    if row is not None:
+        keys = row.keys()
+        plan = row["plan"] if "plan" in keys else None
+        has_plan = bool(plan and str(plan) not in ("", "0", "None"))
+        exp_iso = row["expired_at"] if "expired_at" in keys else None
+        if exp_iso:
+            exp = _fmt_iso(exp_iso)
+        elif ("created_at" in keys and row["created_at"]):
+            exp = "永久" if has_plan else "未购买"
+        else:
+            exp = "-"
+        try:
+            sigs = json.loads(row["signals"] or "[]")
+        except (ValueError, TypeError):
+            sigs = []
+        u = store.user(tok)
+        return {
+            "token": tok, "email": row["email"], "user_id": row["user_id"], "panel": row["panel"],
+            "plan": (f"套餐 #{plan}" if has_plan else None),
+            "created_at": _fmt_iso(row["created_at"] if "created_at" in keys else None) or "-",
+            "expired": exp,
+            "banned": (u["banned"] if u is not None and "banned" in u.keys() else 0),
+            "traffic": _human_bytes(row["traffic_bytes"] or 0),
+            "score": row["score"], "level": row["level"],
+            "signals": [(s.get("detail") if s.get("name") == "命中特征库" and s.get("detail")
+                         else s.get("name")) for s in sigs],
+            "pull_count": row["pull_count"], "distinct_ips": row["distinct_ips"],
+            "distinct_uas": row["distinct_uas"], "online_ips": row["online_ips"],
+            "ip_shared_users": row["ip_shared_users"],
+            "pulls": _detail_pulls(store, tok),
+        }
+    # 慢路径兜底: 内鬼库账号已移出 scores, 或尚未算过。轻量重算——不做 ip_panel_map/
+    # email_panel_map 全表扫描(跨面板/同邮箱信号在详情里略过), 避免卡顿。
+    from .enrich import Blacklist, IpClassifier, UaClassifier, FeatureLib, InsiderMatcher
     from .features import build_features
-    from .pipeline import _disabled_signals
+    from .pipeline import _disabled_signals, load_config
     from .scoring import score_token
+    from datetime import timedelta, timezone
     user = store.user(tok)
     pulls = list(store.pulls_for(tok))
     if not user and not pulls:
         return {"error": "未找到该用户"}
-    from datetime import timedelta, timezone
-    from .pipeline import load_config
     _cfg = load_config(store)
-    _ipc0 = IpClassifier()
     win_h = _cfg.thresholds.online_window_hours
     _now = datetime.now(timezone.utc)
     _since = (_now - timedelta(hours=max(1, win_h))).isoformat()
-    from .enrich import FeatureLib, InsiderMatcher
     r = score_token(build_features(tok, pulls, user, IpClassifier(), UaClassifier(), Blacklist(),
                                    ip_users=store.ip_user_counts_for_token(tok, _since),
                                    window_hours=win_h, now=_now,
-                                   ip_panels=store.ip_panel_map(), email_panels=store.email_panel_map(),
                                    featlib=FeatureLib(store), burst_window=_cfg.thresholds.burst_ua_window,
                                    night_start=_cfg.thresholds.night_start_hour,
                                    night_end=_cfg.thresholds.night_end_hour,
@@ -307,7 +354,7 @@ def _user_detail(store, tok: str) -> dict:
         exp = "永久" if has_plan else "未购买"
     else:
         exp = "-"
-    d = {
+    return {
         "token": tok, "email": r.email, "user_id": r.user_id, "panel": r.panel,
         "plan": (f"套餐 #{plan}" if has_plan else None),
         "created_at": r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "-",
@@ -318,11 +365,8 @@ def _user_detail(store, tok: str) -> dict:
         "pull_count": r.pull_count, "distinct_ips": r.distinct_ips,
         "distinct_uas": r.distinct_uas, "online_ips": r.online_ips,
         "ip_shared_users": r.ip_shared_users,
-        "pulls": [{"ts": (p["ts"] or "")[:19].replace("T", " "), "ip": p["ip"],
-                   "asn": _ip_asn_label(_ipc0, p["ip"]),
-                   "ua": (p["ua"] or "")[:30]} for p in pulls[-15:][::-1]],
+        "pulls": _detail_pulls(store, tok),
     }
-    return d
 
 
 _ASN_TYPE_CN = {"hosting": "机房", "residential": "住宅", "self": "自有", "unknown": "?"}
