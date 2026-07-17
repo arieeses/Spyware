@@ -97,6 +97,10 @@ def sync_v2board(store: Store, cfg: dict, panel: str = None):
     except Exception:  # noqa: BLE001
         pass
     try:
+        store.set_panel_groups(panel, conn.fetch_groups())   # 缓存权限组名→id, 供「检查分组」本地判定
+    except Exception:  # noqa: BLE001
+        pass
+    try:
         protos, total, relay = conn.detect_nodes(store, panel)
     except Exception:  # noqa: BLE001
         protos, total, relay = [], 0, 0

@@ -85,6 +85,19 @@ class V2BoardConnector:
         finally:
             conn.close()
 
+    def fetch_groups(self):
+        """本面板权限组 {组名: 组id}(server_group 表极小, 几行)。同步时缓存到本地,
+        供「检查分组」纯本地判定, 不再逐次远程扫 v2_user。读操作。"""
+        prefix = self.cfg.get("prefix", "v2_")
+        gtable = prefix + (self.cfg.get("group_table") or "server_group")
+        conn = self._connect(read_timeout=15)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT id, name FROM {gtable}")
+                return {r["name"]: r["id"] for r in cur.fetchall() if r.get("name") is not None}
+        finally:
+            conn.close()
+
     def move_users_to_group(self, tokens, group_name: str):
         """把 tokens 对应用户的权限组改成 group_name(按组名在本面板查组ID)。写操作。
         返回 (moved, gid, err)。"""

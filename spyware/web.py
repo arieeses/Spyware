@@ -1450,10 +1450,10 @@ def render_insiders(store, msg="", err="") -> str:
           <button class="btn sm" type="button" onclick="impFeat(null)">导入特征到特征库</button>
           <button class="btn sm" type="button" onclick="openM('spyGroupModal')">移入权限组</button>
           <form method="post" action="/insiders/check-group" style="margin:0">
-            <button class="btn sm ghost">检查{esc(spy_group)}分组</button></form>
+            <button class="btn sm ghost" title="用本地同步数据判定, 不远程查询, 秒出">检查{esc(spy_group)}分组</button></form>
         </div>
       </div>
-      {f'<div class="dim small" style="margin-top:6px">分组状态上次检查: {esc(spy_status_at)}</div>' if spy_status_at else ''}
+      {f'<div class="dim small" style="margin-top:6px">分组状态上次检查: {esc(spy_status_at)} · 依据上次同步的本地数据(要最新请先到「运行控制」同步)</div>' if spy_status_at else ''}
       <div class="dim small" style="margin:8px 0 10px">在风险名单点「移入内鬼」把已确认内鬼移到这里: 它<b>不再出现在风险名单</b>(但在名单里<b>搜索仍可找到并标注「内鬼」</b>), 它的 IP/UA/ASN/邮箱<b>继续参与检测</b>——其他账号命中即触发「命中内鬼库」信号(同伙)。<b>点某行看详情</b>, 每行「导入」可单独导入该号特征, 「移出」还原回名单。</div>
       <script>var _INS_EMAILS={emails_js}, _INS_IPS={ips_js}, _INS_FEAT={feat_js}, _INS_FEAT_ALL={agg_js};</script>
       {_COPYLIST_JS}{_IMPFEAT_JS}
@@ -3108,7 +3108,8 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     page = 1
                 out = {"rows": [], "total": 0}
-                # 优先读本地(同步时已拉入); 本地没有再回退实时查远程
+                # 只读本地(同步 v2board 时已把每日流量拉进 traffic_daily); 不再实时查远程,
+                # 避免远程 stat_user 查询拖慢面板。本地没有就提示先同步。
                 local = store.traffic_daily_for(tok)
                 if local:
                     rows = [{"date": datetime.utcfromtimestamp(r["day"]).strftime("%Y-%m-%d"),
@@ -3116,22 +3117,7 @@ class Handler(BaseHTTPRequestHandler):
                              "rate": f'{float(r["rate"] or 1):.2f}'} for r in local]
                     out = {"rows": rows, "total": len(rows)}
                 else:
-                    user = store.user(tok)
-                    if user and user["user_id"] and "panel" in user.keys() and user["panel"]:
-                        src = next((s for s in store.list_sources()
-                                    if s["type"] == "v2board" and s["name"] == user["panel"]), None)
-                        if src:
-                            try:
-                                from .connectors.v2board import V2BoardConnector
-                                conn = V2BoardConnector(json.loads(src["config"] or "{}"))
-                                rows = conn.query_traffic(user["user_id"], days=90)
-                                out = {"rows": rows, "total": len(rows), "live": True}
-                            except Exception as e:  # noqa: BLE001
-                                out = {"error": f"流量查询失败: {e}"}
-                        else:
-                            out = {"error": "该机场未接入 v2board 数据库"}
-                    else:
-                        out = {"error": "该用户暂无本地流量, 同步 v2board 后可见"}
+                    out = {"error": "该用户暂无本地流量, 到「运行控制」同步 v2board 后可见"}
                 self._send(json.dumps(out, ensure_ascii=False).encode(),
                            "application/json; charset=utf-8")
                 return
@@ -3581,44 +3567,35 @@ class Handler(BaseHTTPRequestHandler):
                 self._to("/featlib?msg=" + quote(msg + "(已去重)"))
                 return
             if path == "/insiders/check-group":
+                # 纯本地判定: 用同步到本地的 users.group_id + 缓存的权限组名→id 映射,
+                # 不再远程扫 v2_user(避免大 IN 全表扫、请求阻塞)。数据新鲜度=上次同步。
                 group_name = store.get_kv("spy_group_name", "Lv.spy") or "Lv.spy"
-                panel_cfg = {}
-                for s in store.list_sources():
-                    if s["type"] != "v2board" or not s["enabled"]:
-                        continue
-                    try:
-                        cfg = json.loads(s["config"] or "{}")
-                    except (ValueError, TypeError):
-                        continue
-                    panel_cfg[cfg.get("panel") or s["name"]] = cfg
-                by_panel, no_panel = {}, []
+                pg = store.get_panel_groups()            # {panel: {组名: 组id}}
+                # 各面板该组的 id(某面板未同步过组映射则为 None)
+                spy_gid_by_panel = {p: (m or {}).get(group_name) for p, m in pg.items()}
+                status, no_acct, no_map = {}, 0, 0
                 for r in store.list_insiders():
-                    p = (r["panel"] or "").strip()
-                    (by_panel.setdefault(p, []).append(r["token"]) if p else no_panel.append(r["token"]))
-                from .connectors.v2board import V2BoardConnector
-                status, errs = {}, []
-                for panel, toks in by_panel.items():
-                    cfg = panel_cfg.get(panel)
-                    if not cfg:
+                    panel = (r["panel"] or "").strip()
+                    u = store.user(r["token"])
+                    gid_user = (u["group_id"] if u is not None else None)
+                    spy_gid = spy_gid_by_panel.get(panel)
+                    if spy_gid is None:                  # 该面板组映射未同步 → 未知
+                        no_map += 1
                         continue
-                    try:
-                        st, err = V2BoardConnector(cfg).group_status(toks, group_name)
-                        if err:
-                            errs.append(f"{panel}: {err}")
-                        status.update({t: bool(v) for t, v in st.items()})
-                    except Exception as e:  # noqa: BLE001
-                        errs.append(f"{panel}: {e}")
-                for panel, cfg in (panel_cfg.items() if no_panel else []):
-                    try:
-                        st, _err = V2BoardConnector(cfg).group_status(no_panel, group_name)
-                        status.update({t: bool(v) for t, v in st.items()})
-                    except Exception:  # noqa: BLE001
-                        pass
+                    if gid_user is None:                 # 无本地账号 → 未知
+                        no_acct += 1
+                        continue
+                    status[r["token"]] = (int(gid_user) == int(spy_gid))
                 store.set_kv("spy_status", json.dumps(status))
                 store.set_kv("spy_status_at", datetime.now().isoformat(timespec="minutes"))
-                msg = f"已检查 {len(status)} 个内鬼的「{group_name}」分组状态"
-                if errs:
-                    msg += " · 问题: " + "; ".join(errs[:5])
+                msg = f"已按本地同步数据检查 {len(status)} 个内鬼的「{group_name}」分组"
+                extra = []
+                if no_map:
+                    extra.append(f"{no_map} 个所属面板未同步组信息(先到运行控制同步一次)")
+                if no_acct:
+                    extra.append(f"{no_acct} 个无本地账号")
+                if extra:
+                    msg += " · " + "; ".join(extra)
                 self._to("/insiders?msg=" + quote(msg)); return
             if path == "/insiders/to-group":
                 group_name = (form.get("group_name", "") or "").strip() or "Lv.spy"
