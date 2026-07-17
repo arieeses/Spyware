@@ -29,7 +29,6 @@ from urllib.parse import parse_qs, quote, urlparse
 from . import __version__, auth, sysinfo
 from .config import BASE_DIR, CONFIG
 from .log_parser import load_proxy_nets, parse_line
-from .pipeline import decide
 from .runner import run_all, run_source
 from .store import Store
 
@@ -51,7 +50,6 @@ ICONS = {
     "risk": '<path d="M12 3l8 3v5c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z"/><path d="M12 9v4M12 16h.01"/>',
     "rules": '<path d="M4 8h9M17 8h3M4 16h3M11 16h9"/><circle cx="15" cy="8" r="2"/><circle cx="9" cy="16" r="2"/>',
     "whitelist": '<path d="M12 3l8 3v5c0 4.5-3.2 7.8-8 9-4.8-1.2-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
-    "domains": '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18"/>',
     "runlog": '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
     "run": '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/>',
     "settings": '<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.5-2.4 1a7 7 0 0 0-1.7-1L14.5 2h-4l-.3 2.4a7 7 0 0 0-1.7 1l-2.4-1-2 3.5L4.1 11a7 7 0 0 0 0 2l-2 1.6 2 3.5 2.4-1a7 7 0 0 0 1.7 1l.3 2.4h4l.3-2.4a7 7 0 0 0 1.7-1l2.4 1 2-3.5-2-1.6a7 7 0 0 0 .1-1z"/>',
@@ -70,7 +68,7 @@ def icon(key: str) -> str:
 NAV = [
     ("", [("dashboard", "仪表盘", "/")]),
     ("接入管理", [
-        ("v2board", "前端面板", "/panels/v2board"),
+        ("v2board", "数据接入", "/panels/v2board"),
         ("log", "日志接入", "/panels/log"),
         ("logstore", "日志库", "/logstore"),
     ]),
@@ -80,7 +78,6 @@ NAV = [
         ("whitelist", "黑白名单", "/whitelist"),
         ("featlib", "特征库", "/featlib"),
         ("insiders", "内鬼库", "/insiders"),
-        ("domains", "入口域名", "/domains"),
         ("gateway", "网关联动", "/gateway"),
     ]),
     ("运行", [
@@ -149,16 +146,6 @@ else
   journalctl -u spyware-agent -n 12 --no-pager 2>/dev/null || tail -n 12 /var/log/syslog 2>/dev/null
 fi
 """
-
-# 分级入口域名: (key, 名称, 说明)
-DOMAIN_TIERS = [
-    ("normal", "正常用户", "风险正常的用户从此入口拉取订阅(真实节点)。"),
-    ("low", "低风险", "低风险用户入口(可与正常相同, 或单独观察)。"),
-    ("mid", "中风险", "中风险用户入口(可对应限速节点池)。"),
-    ("high", "高风险", "高风险用户入口(隔离节点, 可随时封禁不影响正常用户)。"),
-    ("insider", "内鬼专用", "命中黑名单的确认内鬼专用入口: 下发特定IP/蜜罐节点, 便于溯源/投毒。"),
-]
-
 
 # ————————————————— 通用 —————————————————
 
@@ -769,12 +756,12 @@ def _log_modals(panels=None) -> str:
     panels = panels or []
     add_sel = _panel_options(panels)
     edit_sel = _panel_options(panels, "el_panel")
-    plist = ("、".join(esc(p) for p in panels)) if panels else "(还没建前端面板)"
+    plist = ("、".join(esc(p) for p in panels)) if panels else "(还没建数据接入)"
     # 每行 "路径 | 面板名" 单独归属; 末尾没写 | 的行用下面「默认归属面板」
     path_hint = (
         '<div class="dim small" style="margin-top:4px;line-height:1.7">'
         '每行一个路径; 填目录=读其下所有 .log; 通配用 *。<br>'
-        '一个源里多个站点分别归属: 行末加 <code>| 面板名</code> 指定该路径归哪个前端面板。<br>'
+        '一个源里多个站点分别归属: 行末加 <code>| 面板名</code> 指定该路径归哪个数据接入。<br>'
         f'没写 <code>|</code> 的行用上面的「默认归属面板」。可选面板: <b>{plist}</b>。</div>')
     panel_hint = ('<div class="dim small" style="margin-top:4px">'
                   '路径行没单独写 <code>| 面板名</code> 时用它。</div>')
@@ -791,7 +778,7 @@ def _log_modals(panels=None) -> str:
         <input type="hidden" name="type" value="logfile">
         <input type="hidden" name="mode" id="logMode" value="agent">
         <div class="mfield"><input name="name" placeholder="名称, 如: VPS-1" required></div>
-        <div class="mfield"><label class="dim small">默认归属前端面板</label>""" + add_sel + panel_hint + """</div>
+        <div class="mfield"><label class="dim small">默认归属数据接入</label>""" + add_sel + panel_hint + """</div>
         <div class="mfield" id="lf_agenttip"><div class="dim small">探针: 添加后点该行「复制安装命令」在面板服务器执行; 日志路径/间隔装好后在该行编辑。</div></div>
         <div class="mfield" id="lf_path" style="display:none">
           <label class="dim small">日志路径</label>
@@ -806,7 +793,7 @@ def _log_modals(panels=None) -> str:
       <form method="post" action="/sources/edit">
         <input type="hidden" name="id" id="el_id">
         <div class="mfield"><label class="dim small">名称</label><input name="name" id="el_name"></div>
-        <div class="mfield"><label class="dim small">默认归属前端面板</label>""" + edit_sel + panel_hint + """</div>
+        <div class="mfield"><label class="dim small">默认归属数据接入</label>""" + edit_sel + panel_hint + """</div>
         <div class="mfield"><label class="dim small" id="el_lbl">日志路径</label>
           <textarea name="path" id="el_path" rows="4" placeholder=\"""" + ph + """\"></textarea>
           """ + path_hint + """</div>
@@ -879,10 +866,10 @@ def render_runlog(store: Store, kind: str = "", name: str = "", size: str = "10"
     if not rows:
         rows = '<tr><td colspan="5" class="dim" style="padding:16px">暂无运行记录</td></tr>'
 
-    # 一级: 全部 / 前端面板(v2board) / 日志接入(logfile)
+    # 一级: 全部 / 数据接入(v2board) / 日志接入(logfile)
     none_sel = not kind and not name
     top = (f'<a class="tab {"active" if none_sel else ""}" href="/runlog?size={quote(size)}">全部</a>'
-           f'<a class="tab {"active" if kind=="v2board" else ""}" href="/runlog?kind=v2board&size={quote(size)}">前端面板</a>'
+           f'<a class="tab {"active" if kind=="v2board" else ""}" href="/runlog?kind=v2board&size={quote(size)}">数据接入</a>'
            f'<a class="tab {"active" if kind=="logfile" else ""}" href="/runlog?kind=logfile&size={quote(size)}">日志接入</a>')
     # 二级: 选了一级类型后, 展开该类下的数据源
     sub = ""
@@ -1010,7 +997,7 @@ WEIGHT_CN = {
     "online_ips": ("多IP在线", "一个 token 近期在多个不同 IP 活跃, 疑似分发/分布式扫描"),
     "ip_shared": ("IP共用账号", "该 token 的 IP 被多个账号共用, 疑似聚合点/攻击机"),
     "active_lowtraffic": ("有效期内零流量新号", "2025年后注册+订阅有效期内+流量<5MB, 付费却几乎不用, 疑似只拉节点攻击"),
-    "cross_panel_ip": ("跨面板同IP", "同一拉取 IP 出现在多个前端面板, 疑似一台机器打多个机场"),
+    "cross_panel_ip": ("跨面板同IP", "同一拉取 IP 出现在多个面板, 疑似一台机器打多个机场"),
     "email_multi_panel": ("同邮箱多面板", "同一邮箱在多个面板注册, 疑似批量身份"),
     "fixed_schedule": ("固定时段拉取", "拉取时刻跨多天却高度集中在某窄时段, 呈 cron/自动化"),
     "traffic_symmetry": ("流量上下行对称", "近30天上下行接近对称(真人应下行远大于上行), 疑似中转/攻击"),
@@ -1660,128 +1647,6 @@ def render_whitelist(msg="", err="", cat="", tab="white", sub="") -> str:
     </div>"""
 
 
-DEFAULT_PROTOCOLS = ["vless", "vmess", "trojan", "hysteria2", "shadowsocks"]
-
-
-def _panels(store) -> list:
-    return [s["name"] for s in store.list_sources() if s["type"] == "v2board"]
-
-
-def _protocols(store) -> list:
-    raw = store.get_kv("protocols", "")
-    if raw:
-        return [x.strip() for x in raw.split(",") if x.strip()]
-    return DEFAULT_PROTOCOLS
-
-
-def _protocols_for(store, panel: str) -> tuple:
-    """某面板的协议: 优先 v2board 同步自动读取的; 否则回退全局手填。返回 (协议列表, 是否自动)。"""
-    raw = store.get_kv(f"protocols::{panel}", "")
-    if raw:
-        return [x.strip() for x in raw.split(",") if x.strip()], True
-    return _protocols(store), False
-
-
-def _domains_map(store) -> dict:
-    raw = store.get_kv("domains_map", "")
-    try:
-        return json.loads(raw) if raw else {}
-    except (ValueError, TypeError):
-        return {}
-
-
-def render_domains(store, panel_sel="", tier_sel="", msg="", err="") -> str:
-    panels = _panels(store)
-    protos = _protocols(store)
-    dm = _domains_map(store)
-    tier_keys = [t[0] for t in DOMAIN_TIERS]
-    tier_labels = {t[0]: t[1] for t in DOMAIN_TIERS}
-
-    scope = store.get_kv("rewrite_scope", "relay") or "relay"
-    scope_card = f"""
-    <div class="card">
-      <div class="card-title">下发范围</div>
-      <div class="dim small" style="margin-bottom:8px">方案B: 网关只改写<b>中转节点</b>(parent_id 非空)的入口域名; <b>直连节点保持原样不动</b>。</div>
-      <form method="post" action="/domains/scope">
-        <div class="segbar">
-          <button name="mode" value="relay" class="seg {'active' if scope=='relay' else ''}">只改写中转节点</button>
-          <button name="mode" value="all" class="seg {'active' if scope!='relay' else ''}">改写全部节点</button>
-        </div>
-      </form>
-    </div>"""
-
-    proto_card = f"""
-    <div class="card">
-      <div class="card-title">协议列表(全局兜底)</div>
-      <div class="dim small" style="margin-bottom:8px">
-        各面板协议<b>优先自动读取</b> v2board 节点表(同步时自动填, 见下方每面板标注);
-        此处仅作<b>未同步到时的兜底</b>。逗号分隔。
-      </div>
-      <form method="post" action="/domains/protocols" class="autoform">
-        <input name="protocols" value="{esc(', '.join(_protocols(store)))}" style="flex:1;min-width:260px">
-        <button class="btn">保存兜底协议</button>
-      </form>
-    </div>"""
-
-    if not panels:
-        return f"""{_card_alert(msg, err)}{scope_card}{proto_card}
-        <div class="card"><div class="dim">请先到「前端面板」添加 v2board 面板, 再来为每个面板配置入口域名。</div></div>"""
-
-    panel_sel = panel_sel if panel_sel in panels else panels[0]
-    tier_sel = tier_sel if tier_sel in tier_keys else "normal"
-
-    opts = "".join(f'<option value="{esc(p)}" {"selected" if p==panel_sel else ""}>{esc(p)}</option>' for p in panels)
-    panel_select = (f'<select onchange="location.href=\'/domains?panel=\'+encodeURIComponent(this.value)+\'&tier={tier_sel}\'"'
-                    f' style="padding:7px 10px;border:1px solid #d5dae1;border-radius:6px">{opts}</select>')
-
-    tier_tabs = ""
-    for k in tier_keys:
-        active = "active" if k == tier_sel else ""
-        tier_tabs += f'<a class="subtab {active}" href="/domains?panel={quote(panel_sel)}&tier={quote(k)}">{tier_labels[k]}</a>'
-
-    panel_protos, auto = _protocols_for(store, panel_sel)
-    proto_src = ('<span class="on">已自动读取</span>(v2board 节点表)'
-                 if auto else '<span class="off">未同步</span>, 用全局兜底; 到「前端面板」同步后自动填')
-    cur = dm.get(panel_sel, {}).get(tier_sel, {})
-    rows = ""
-    for proto in panel_protos:
-        val = esc(cur.get(proto, ""))
-        rows += f"""
-        <div class="settingrow">
-          <div class="sr-label"><b>{esc(proto)}</b></div>
-          <div class="sr-field"><input name="domain_{esc(proto)}" value="{val}" placeholder="如 {esc(proto)}-{tier_sel}.{esc(panel_sel)}.com"></div>
-        </div>"""
-
-    tier_desc = next((t[2] for t in DOMAIN_TIERS if t[0] == tier_sel), "")
-    return f"""{_card_alert(msg, err)}{scope_card}{proto_card}
-    <div class="card">
-      <div class="card-title">入口域名 · 分面板 / 分等级 / 分协议</div>
-      <div class="autoform" style="margin-bottom:6px">
-        <span>前端面板:</span> {panel_select}
-      </div>
-      <div class="subtabs">{tier_tabs}</div>
-      <div class="dim small" style="margin:6px 2px">协议: {proto_src} · 为「{esc(panel_sel)}」的「{tier_labels[tier_sel]}」用户配置各协议入口域名(留空=不单独分流)。</div>
-      <form method="post" action="/domains/save">
-        <input type="hidden" name="panel" value="{esc(panel_sel)}">
-        <input type="hidden" name="tier" value="{esc(tier_sel)}">
-        {rows}
-        <div style="margin-top:14px"><button class="btn">保存 {esc(panel_sel)} / {tier_labels[tier_sel]}</button></div>
-      </form>
-    </div>
-    <div class="card">
-      <div class="card-title">如何正确下发到对应前端(方案B)</div>
-      <div class="dim small" style="line-height:1.8">
-        订阅网关对每次拉取调 <code>/api/decision?token=xxx</code>, 返回带 <code>panel</code>、<code>tier</code>、<code>scope</code>、
-        <code>domains</code>(该面板+等级下每协议域名映射, 如 {{"vless":"...","trojan":"..."}})。<br>
-        网关遍历订阅里每个节点, 按下面规则改写:<br>
-        &nbsp;&nbsp;• <b>直连节点</b>(parent_id 为空)→ <b>忽略, 保持原样不动</b>;<br>
-        &nbsp;&nbsp;• <b>中转节点</b>(parent_id 非空)→ 用 <code>domains[该节点协议]</code> 替换其入口 host;<br>
-        &nbsp;&nbsp;• 映射里没有该协议 → 保留原样。<br>
-        这样 8 面板子域名不同、每协议域名不同都能按 (面板×等级×协议) 精确命中; 高危/内鬼的中转节点被改写到隔离/蜜罐域名, 直连节点不受影响。
-      </div>
-    </div>"""
-
-
 def render_entities(store: Store, kind: str) -> str:
     cn, hint = ENTITY_META.get(kind, (kind, ""))
     rows = ""
@@ -1839,11 +1704,13 @@ _DETAIL_MODALS = """
     </div></div>"""
 
 
-def _render_insider_hits(store, search: str) -> str:
-    """搜索时: 命中搜索词的已确认内鬼(已移出名单)单独列出, 红色「内鬼」标注, 点行看详情。"""
+def _render_insider_hits(store, search: str = "", terms=None) -> str:
+    """搜索时: 命中搜索词的已确认内鬼(已移出名单)单独列出, 红色「内鬼」标注, 点行看详情。
+    terms(批量搜索)存在时按"命中任一词"匹配; 否则按单条 search 子串匹配。"""
     import json as _json
+    needles = [t.strip().lower() for t in (terms or []) if t.strip()] if terms else []
     s = (search or "").strip().lower()
-    if not s:
+    if not needles and not s:
         return ""
     hits = []
     for r in store.list_insiders():
@@ -1852,7 +1719,7 @@ def _render_insider_hits(store, search: str) -> str:
         hay = " ".join([r["token"] or "", r["email"] or "", r["panel"] or "",
                         " ".join(ips), " ".join(_json.loads(r["uas"] or "[]")),
                         " ".join("as" + str(a) for a in asns)]).lower()
-        if s in hay:
+        if (needles and any(n in hay for n in needles)) or (not needles and s in hay):
             hits.append((r, ips, asns))
     if not hits:
         return ""
@@ -1861,7 +1728,6 @@ def _render_insider_hits(store, search: str) -> str:
     for r, ips, asns in hits:
         trs += (f'<tr style="cursor:pointer" onclick="userDetail(\'{esc(r["token"])}\')">'
                 f'<td><span class="badge" style="background:#e5484d;color:#fff">内鬼</span></td>'
-                f'<td class="mono small dim">{esc(r["token"][:12])}</td>'
                 f'<td class="small">{esc(r["email"] or "-")}</td>'
                 f'<td class="small">{esc(r["panel"] or "-")}</td>'
                 f'<td class="small dim">{esc(", ".join(ips[:4]))}{"…" if len(ips) > 4 else ""}</td>'
@@ -1871,15 +1737,22 @@ def _render_insider_hits(store, search: str) -> str:
             f'<div class="card-title" style="margin:0 0 8px">内鬼库命中 '
             f'<span class="dim small" style="font-weight:400;margin-left:6px">共 {len(hits)} 个 · 已确认内鬼(已移出名单), 点行看详情</span></div>'
             f'<div class="tablewrap"><table class="grid"><thead><tr>'
-            f'<th>标注</th><th>Token</th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th><th>最新拉取订阅</th></tr></thead>'
+            f'<th>标注</th><th>邮箱</th><th>机场</th><th>IP</th><th>ASN</th><th>最新拉取订阅</th></tr></thead>'
             f'<tbody>{trs}</tbody></table></div></div>')
 
 
 _RISK_SORTABLE = {"uid", "ips", "online", "uas", "shared", "pull", "score", "last", "created", "expired"}
 
 
+def _parse_batch_terms(batch: str):
+    """批量搜索输入 → 去重词表(按换行/逗号/空白分隔)。"""
+    import re as _re
+    return list(dict.fromkeys(t for t in _re.split(r"[\s,，、]+", (batch or "").strip()) if t))
+
+
 def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str = "",
-                    size: str = "10", page: str = "1", sort: str = "", sdir: str = "desc") -> str:
+                    size: str = "10", page: str = "1", sort: str = "", sdir: str = "desc",
+                    batch: str = "") -> str:
     if str(size) not in ("10", "50", "100", "150"):
         size = "10"
     if sort not in _RISK_SORTABLE:
@@ -1888,6 +1761,14 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     counts = store.score_counts()      # 直接读物化评分, 与总用户数解耦
     excluded = counts["excluded"]
 
+    # 批量搜索优先(填了就走批量, 忽略单条搜索)
+    batch = (batch or "").strip()
+    batch_terms = _parse_batch_terms(batch) if batch else []
+    token_filter = None
+    if batch_terms:
+        from .asn import get_asndb
+        token_filter = store.tokens_by_terms(batch_terms, get_asndb())
+        search = ""
     # 搜索: token / 邮箱 / IP / UA / ASN
     search = (search or "").strip()
     if search:
@@ -1909,7 +1790,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         tabs += (f'<a class="tab {active}" href="/risk?level={quote(key)}&panel={pf}{sortq}">'
                  f'{name} <b>{cnt[key]}</b></a>')
 
-    # 机场/前端面板 筛选
+    # 机场/数据接入 筛选
     lf = quote(flt or "all")
     panels = store.score_panels()
     ptabs = f'<a class="tab {"active" if (panel_flt or "all")=="all" else ""}" href="/risk?level={lf}&panel=all{sortq}">全部面板</a>'
@@ -1919,9 +1800,9 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
     panel_bar = f'<div class="tabs">{ptabs}</div>' if panels else ""
 
     # SQL 分页/筛选/搜索: 只取当前页的行, 不再全量载入内存
-    total = store.count_scores(flt, panel_flt, search, ip_tokens)
+    total = store.count_scores(flt, panel_flt, search, ip_tokens, token_filter=token_filter)
     psize, pg, pages, all_mode = _paginate(size, page, total, 10)
-    page_rows = store.list_scores(flt, panel_flt, search, ip_tokens,
+    page_rows = store.list_scores(flt, panel_flt, search, ip_tokens, token_filter=token_filter,
                                   limit=(total or 1) if all_mode else psize,
                                   offset=0 if all_mode else (pg - 1) * psize,
                                   sort=sort, sdir=sdir)
@@ -2016,19 +1897,55 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
         f'<input type="hidden" name="sort" value="{esc(sort)}">'
         f'<input type="hidden" name="sdir" value="{esc(sdir)}">'
         f'<input name="q" value="{esc(search)}" placeholder="搜索 token/邮箱/IP/UA/ASN" style="width:220px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">'
+        f'<button class="btn sm ghost" type="button" onclick="openM(\'batchModal\')">批量搜索</button>'
         f'<button class="btn sm">搜索</button>'
-        + (f'<a class="btn sm ghost" href="/risk?level={quote(flt or "all")}&panel={pf}{sortq}">清除</a>' if search else '')
+        + (f'<a class="btn sm ghost" href="/risk?level={quote(flt or "all")}&panel={pf}{sortq}">清除</a>' if (search or batch_terms) else '')
         + '</form>')
 
+    clear_href = f'/risk?level={quote(flt or "all")}&panel={pf}{sortq}'
+    batch_modal = f"""
+    <div class="modal-bg" id="batchModal"><div class="modal">
+      <h3>批量搜索</h3>
+      <div class="dim small">每行(或用逗号/空格分隔)一个条件, 命中<b>任一</b>即列出。支持
+      <b>token · 邮箱/邮箱前缀 · IP · 网段(CIDR) · UA · ASN(as123 或 123)</b>。</div>
+      <form method="get" action="/risk">
+        <input type="hidden" name="level" value="{esc(flt or 'all')}">
+        <input type="hidden" name="panel" value="{esc(panel_flt or 'all')}">
+        <input type="hidden" name="size" value="{esc(size)}">
+        <input type="hidden" name="sort" value="{esc(sort)}">
+        <input type="hidden" name="sdir" value="{esc(sdir)}">
+        <div class="mfield"><textarea name="qb" rows="10" placeholder="例如:
+315311741
+1.24.16.0/24
+47.236.88.19
+clash-attack
+as135377" style="width:100%;font-family:inherit;font-size:13px">{esc(batch)}</textarea></div>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" onclick="closeM('batchModal')">取消</button>
+          <button class="btn">批量搜索</button>
+        </div>
+      </form>
+    </div></div>"""
+    batch_banner = ""
+    if batch_terms:
+        batch_banner = (
+            f'<div class="card" style="border-left:3px solid var(--pri);margin-bottom:12px;'
+            f'display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+            f'<span>批量搜索: <b>{len(batch_terms)}</b> 个条件 · 命中 <b>{total}</b> 个账号</span>'
+            f'<a class="btn sm ghost" href="{clear_href}">清除批量搜索</a>'
+            f'<button class="btn sm ghost" type="button" onclick="openM(\'batchModal\')">编辑条件</button>'
+            f'</div>')
+
     pager = _pager_html("/risk", {"level": flt or "all", "panel": panel_flt or "all", "q": search,
-                                  "sort": sort, "sdir": sdir},
+                                  "qb": batch, "sort": sort, "sdir": sdir},
                         size if str(size) in ("10", "50", "100", "150") else "10",
                         pg, pages, ["10", "50", "100", "150"])
 
-    insider_hits = _render_insider_hits(store, search)   # 搜索命中的已确认内鬼(标注内鬼)
+    insider_hits = _render_insider_hits(store, search, batch_terms or None)   # 命中的已确认内鬼(标注内鬼)
 
     return f"""
     {insider_hits}
+    {batch_banner}
     <div class="card">
       <div style="display:flex;flex-wrap:wrap;gap:12px 8px;align-items:flex-start;margin-bottom:12px">
         <div style="flex:1 1 300px;min-width:0">
@@ -2050,7 +1967,7 @@ def render_risklist(store: Store, flt: str, panel_flt: str = "all", search: str 
       </table></div>
       {pager}
       <div class="dim small" style="margin-top:8px">点用户行看详情; 「同IP」点开列出同 IP 账号; 「移入内鬼」把确认内鬼移进内鬼库(从名单移除, 特征继续检测)。</div>
-    </div>{col_modal}
+    </div>{col_modal}{batch_modal}
     <div class="modal-bg" id="exportModal"><div class="modal">
       <h3>导出CSV</h3><div class="dim small">选要导出的风险等级(可多选), 按当前面板/搜索筛选导出</div>
       <form method="get" action="/risk/export">
@@ -2876,7 +2793,7 @@ document.querySelectorAll('table.sortable').forEach(function(t){{
 
 VIEWS = {
     "/": ("dashboard", "仪表盘"),
-    "/panels/v2board": ("v2board", "前端面板"),
+    "/panels/v2board": ("v2board", "数据接入"),
     "/panels/log": ("log", "日志接入"),
     "/logstore": ("logstore", "日志库"),
     "/risk": ("risk", "风险名单"),
@@ -2884,7 +2801,6 @@ VIEWS = {
     "/whitelist": ("whitelist", "黑白名单"),
     "/featlib": ("featlib", "特征库"),
     "/insiders": ("insiders", "内鬼库"),
-    "/domains": ("domains", "入口域名"),
     "/gateway": ("gateway", "网关联动"),
     "/run": ("run", "运行控制"),
     "/runlog": ("runlog", "运行日志"),
@@ -2978,13 +2894,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             # 订阅网关决策接口(免登录, 供 Nginx/网关服务端调用; 请仅内网访问)
-            if path == "/api/decision":
-                tok = q.get("token", [""])[0]
-                body = json.dumps(decide(store, tok) if tok else {"error": "missing token"},
-                                  ensure_ascii=False).encode()
-                self._send(body, "application/json; charset=utf-8")
-                return
-
             if path == "/api/gateway_feed":
                 # 网关拉取: 从特征库/内鬼库吐出 {ips, asns, uas, tokens}(邮箱前缀已翻译成token)
                 fk = store.get_kv("gateway_feed_key", "")
@@ -3180,7 +3089,8 @@ class Handler(BaseHTTPRequestHandler):
                 content = render_risklist(store, q.get("level", ["all"])[0],
                                           q.get("panel", ["all"])[0], q.get("q", [""])[0],
                                           q.get("size", ["10"])[0], q.get("page", ["1"])[0],
-                                          q.get("sort", [""])[0], q.get("sdir", ["desc"])[0])
+                                          q.get("sort", [""])[0], q.get("sdir", ["desc"])[0],
+                                          q.get("qb", [""])[0])
             elif active == "rules":
                 content = render_rules(store, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "whitelist":
@@ -3192,9 +3102,6 @@ class Handler(BaseHTTPRequestHandler):
                                             q.get("q", [""])[0])
             elif active == "insiders":
                 content = render_insiders(store, q.get("msg", [""])[0], q.get("err", [""])[0])
-            elif active == "domains":
-                content = render_domains(store, q.get("panel", [""])[0], q.get("tier", [""])[0],
-                                         q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "gateway":
                 content = render_gateway(store, q.get("msg", [""])[0], q.get("err", [""])[0],
                                          q.get("tab", ["feed"])[0])
@@ -3719,25 +3626,6 @@ class Handler(BaseHTTPRequestHandler):
                 with open(CONFIG.hosting_cidrs_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))
                 self._to("/whitelist?cat=hosting&sub=cidr&msg=" + quote("机房库已保存")); return
-            if path == "/domains/protocols":
-                store.set_kv("protocols", form.get("protocols", ""))
-                self._to("/domains?msg=" + quote("协议列表已更新")); return
-            if path == "/domains/scope":
-                store.set_kv("rewrite_scope", "all" if form.get("mode") == "all" else "relay")
-                self._to("/domains?msg=" + quote("下发范围已更新")); return
-            if path == "/domains/save":
-                panel = form.get("panel", "")
-                tier = form.get("tier", "normal")
-                dm = _domains_map(store)
-                slot = dm.setdefault(panel, {}).setdefault(tier, {})
-                for proto in _protocols_for(store, panel)[0]:
-                    v = form.get(f"domain_{proto}", "").strip()
-                    if v:
-                        slot[proto] = v
-                    else:
-                        slot.pop(proto, None)
-                store.set_kv("domains_map", json.dumps(dm, ensure_ascii=False))
-                self._to(f"/domains?panel={quote(panel)}&tier={quote(tier)}&msg=" + quote("已保存")); return
             if path == "/whitelist/save-ua":
                 with open(CONFIG.ua_clients_file, "w", encoding="utf-8") as f:
                     f.write(form.get("content", ""))

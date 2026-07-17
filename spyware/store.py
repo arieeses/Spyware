@@ -347,8 +347,68 @@ class Store:
             "ORDER BY panel").fetchall()
         return [r[0] for r in rows]
 
-    def _scores_where(self, level, panel, search, ip_tokens, levels=None):
+    def tokens_by_terms(self, terms, asndb=None):
+        """批量搜索: 返回匹配任一 term 的 token 集。term 支持
+        token/邮箱(含前缀,子串) · IP(子串) · UA(子串) · ASN(as123 / 123) · 网段(CIDR)。
+        最多扫一次 pulls(仅当含 IP/UA/ASN/网段类词时)。"""
+        import ipaddress
+        out = set()
+        cidrs, subs, asn_nums = [], [], set()
+        for raw in terms or []:
+            t = (raw or "").strip()
+            if not t:
+                continue
+            like = f"%{t}%"        # token/邮箱(前缀) 子串: scores 表, 便宜
+            for r in self.conn.execute(
+                    "SELECT token FROM scores WHERE token LIKE ? OR email LIKE ?", (like, like)).fetchall():
+                out.add(r["token"])
+            if "@" in t:           # 邮箱: 上面已覆盖, 不必扫 pulls
+                continue
+            if "/" in t:
+                try:
+                    cidrs.append(ipaddress.ip_network(t, strict=False)); continue
+                except ValueError:
+                    pass
+            tl = t.lower()
+            if tl.startswith("as") and tl[2:].isdigit():
+                asn_nums.add(tl[2:]); continue
+            if tl.isdigit():       # 纯数字: 可能是 ASN(邮箱前缀已被上面 LIKE 覆盖)
+                asn_nums.add(tl)
+            subs.append(tl)        # 其余当 IP/UA 子串
+        if cidrs or subs or (asn_nums and asndb is not None):
+            for r in self.conn.execute("SELECT token, ip, ua FROM pulls").fetchall():
+                ip = r["ip"] or ""
+                ua = (r["ua"] or "").lower()
+                hit = False
+                if ip:
+                    ipl = ip.lower()
+                    if subs and any(sub in ipl for sub in subs):
+                        hit = True
+                    elif cidrs:
+                        try:
+                            addr = ipaddress.ip_address(ip)
+                            if any(addr in n for n in cidrs):
+                                hit = True
+                        except ValueError:
+                            pass
+                    if not hit and asn_nums and asndb is not None:
+                        asn, _ = asndb.lookup(ip)
+                        if asn and str(asn) in asn_nums:
+                            hit = True
+                if not hit and ua and subs and any(sub in ua for sub in subs):
+                    hit = True
+                if hit:
+                    out.add(r["token"])
+        return out
+
+    def _scores_where(self, level, panel, search, ip_tokens, levels=None, token_filter=None):
         clauses, args = [], []
+        if token_filter is not None:      # 批量搜索: 限定 token 集(空集=无命中)
+            if token_filter:
+                clauses.append("token IN (%s)" % ",".join("?" * len(token_filter)))
+                args += list(token_filter)
+            else:
+                clauses.append("1=0")
         if levels:   # 导出: 多等级
             ph = ",".join("?" * len(levels))
             clauses.append(f"level IN ({ph})"); args += list(levels)
@@ -368,8 +428,9 @@ class Store:
             clauses.append(sub); args += a2
         return ((" WHERE " + " AND ".join(clauses)) if clauses else ""), args
 
-    def count_scores(self, level="all", panel="all", search="", ip_tokens=None, levels=None) -> int:
-        where, args = self._scores_where(level, panel, search, ip_tokens or set(), levels)
+    def count_scores(self, level="all", panel="all", search="", ip_tokens=None, levels=None,
+                     token_filter=None) -> int:
+        where, args = self._scores_where(level, panel, search, ip_tokens or set(), levels, token_filter)
         return self.conn.execute(f"SELECT COUNT(*) FROM scores{where}", args).fetchone()[0]
 
     _SORT_COLS = {"score": "score", "last": "last_pull", "ips": "distinct_ips",
@@ -378,8 +439,8 @@ class Store:
                   "uid": "user_id"}
 
     def list_scores(self, level="all", panel="all", search="", ip_tokens=None,
-                    limit=10, offset=0, levels=None, sort="", sdir="desc"):
-        where, args = self._scores_where(level, panel, search, ip_tokens or set(), levels)
+                    limit=10, offset=0, levels=None, sort="", sdir="desc", token_filter=None):
+        where, args = self._scores_where(level, panel, search, ip_tokens or set(), levels, token_filter)
         col = self._SORT_COLS.get(sort)
         if col:
             direction = "ASC" if sdir == "asc" else "DESC"
