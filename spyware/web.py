@@ -80,6 +80,7 @@ NAV = [
         ("whitelist", "黑白名单", "/whitelist"),
         ("featlib", "特征库", "/featlib"),
         ("insiders", "内鬼库", "/insiders"),
+        ("prefix", "前缀审查", "/prefix"),
         ("domains", "入口域名", "/domains"),
     ]),
     ("运行", [
@@ -1285,6 +1286,46 @@ def render_featurelib(store, msg="", err="", search="") -> str:
         <thead><tr><th>类型</th><th>特征值</th><th>备注</th><th>添加时间</th><th>操作</th></tr></thead>
         <tbody>{trs}</tbody>
       </table></div>
+    </div>"""
+
+
+def render_prefix_review(store, msg="", err="") -> str:
+    prefixes = sorted({r["value"] for r in store.list_signatures()
+                       if r["kind"] == "email" and r["value"]})
+    spy_group = store.get_kv("spy_group_name", "Lv.spy") or "Lv.spy"
+    if not prefixes:
+        return f"""{_card_alert(msg, err)}
+    <div class="card">
+      <div class="card-title">邮箱前缀审查</div>
+      <div class="dim small" style="margin-top:6px">还没登记邮箱前缀。去<a href="/featlib">特征库</a>加「邮箱(子串)」类型的关键词(如 <code>bintest_</code>、<code>shinibbmm</code>),这里就会列出所有邮箱命中的账号供你审查、批量移入 {esc(spy_group)} 组发蜜罐。<br>锚的是邮箱, <b>token 重置也无效</b>; 新注册的同前缀号下次同步自动出现。</div>
+    </div>"""
+    matches = store.users_matching_email_prefixes(prefixes)
+    rows = ""
+    for m in matches:
+        rows += (f'<tr>'
+                 f'<td><input type="checkbox" name="token" value="{esc(m["token"])}"></td>'
+                 f'<td class="small">{esc(m["email"])}</td>'
+                 f'<td class="small">{esc(m["panel"] or "-")}</td>'
+                 f'<td class="small dim">{esc(m["hit"])}</td>'
+                 f'<td class="mono small dim">{esc(m["token"][:12])}</td></tr>')
+    if not rows:
+        rows = '<tr><td colspan="5" class="dim" style="padding:16px">当前无邮箱命中前缀的账号(或都已在内鬼库)</td></tr>'
+    pfx_show = esc(", ".join(prefixes[:10])) + ("…" if len(prefixes) > 10 else "")
+    return f"""{_card_alert(msg, err)}
+    <div class="card">
+      <div class="card-title">邮箱前缀审查 <span class="dim small" style="font-weight:400;margin-left:8px">命中 {len(matches)} 个账号 · 前缀: {pfx_show}</span></div>
+      <div class="dim small" style="margin:6px 0 10px">下列账号邮箱命中了特征库的前缀关键词。<b>人工审查</b>后勾选 → 批量确认为内鬼(移入内鬼库 + {esc(spy_group)} 组发蜜罐)。锚邮箱, <b>token 重置无效</b>。默认不勾, 你确认哪个勾哪个, 防误杀。</div>
+      <form method="post" action="/prefix/move-group"
+            onsubmit="return confirm('把勾选账号移入内鬼库 + {esc(spy_group)} 组?')">
+        <div style="margin-bottom:8px;display:flex;gap:12px;align-items:center">
+          <button class="btn sm danger">确认为内鬼 → 移入 {esc(spy_group)}</button>
+          <label class="dim small"><input type="checkbox" onclick="for(var c of document.getElementsByName('token'))c.checked=this.checked"> 全选/全不选</label>
+        </div>
+        <div class="tablewrap"><table class="grid">
+          <thead><tr><th></th><th>邮箱</th><th>机场</th><th>命中前缀</th><th>token</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table></div>
+      </form>
     </div>"""
 
 
@@ -2654,6 +2695,7 @@ VIEWS = {
     "/whitelist": ("whitelist", "黑白名单"),
     "/featlib": ("featlib", "特征库"),
     "/insiders": ("insiders", "内鬼库"),
+    "/prefix": ("prefix", "前缀审查"),
     "/domains": ("domains", "入口域名"),
     "/run": ("run", "运行控制"),
     "/runlog": ("runlog", "运行日志"),
@@ -2975,6 +3017,8 @@ class Handler(BaseHTTPRequestHandler):
                                             q.get("q", [""])[0])
             elif active == "insiders":
                 content = render_insiders(store, q.get("msg", [""])[0], q.get("err", [""])[0])
+            elif active == "prefix":
+                content = render_prefix_review(store, q.get("msg", [""])[0], q.get("err", [""])[0])
             elif active == "domains":
                 content = render_domains(store, q.get("panel", [""])[0], q.get("tier", [""])[0],
                                          q.get("msg", [""])[0], q.get("err", [""])[0])
@@ -3430,6 +3474,56 @@ class Handler(BaseHTTPRequestHandler):
                 if errs:
                     msg += " · 问题: " + "; ".join(errs[:5])
                 self._to("/insiders?msg=" + quote(msg)); return
+            if path == "/prefix/move-group":
+                tokens = [t for t in formq.get("token", []) if t]
+                if not tokens:
+                    self._to("/prefix?err=" + quote("未勾选账号")); return
+                group_name = store.get_kv("spy_group_name", "Lv.spy") or "Lv.spy"
+                from .asn import get_asndb
+                asndb = get_asndb()
+                # 1) 逐个移入内鬼库(快照特征) + 从名单移除
+                for tok in tokens:
+                    u = store.user(tok)
+                    pulls = list(store.pulls_for(tok))
+                    ips = sorted({p["ip"] for p in pulls if p["ip"]})
+                    uas = sorted({p["ua"] for p in pulls if p["ua"]})
+                    asns = sorted({asndb.lookup(ip)[0] for ip in ips
+                                   if asndb and asndb.lookup(ip)[0]}) if asndb else []
+                    store.add_insider(tok, email=(u["email"] if u else None),
+                                      panel=(u["panel"] if u and "panel" in u.keys() else None),
+                                      ips=ips, uas=uas, asns=list(asns), tags=store.score_tags(tok))
+                    store.delete_score(tok)
+                # 2) 移入 Lv.spy 组(按面板分组; 无面板则各面板试)
+                panel_cfg = {}
+                for s in store.list_sources():
+                    if s["type"] == "v2board" and s["enabled"]:
+                        try:
+                            cfg = json.loads(s["config"] or "{}")
+                        except (ValueError, TypeError):
+                            continue
+                        panel_cfg[cfg.get("panel") or s["name"]] = cfg
+                by_panel = {}
+                for tok in tokens:
+                    u = store.user(tok)
+                    p = (u["panel"] if u and "panel" in u.keys() else None) or ""
+                    by_panel.setdefault(p, []).append(tok)
+                from .connectors.v2board import V2BoardConnector
+                moved, errs = 0, []
+                for panel, toks in by_panel.items():
+                    cfgs = [panel_cfg[panel]] if panel in panel_cfg else list(panel_cfg.values())
+                    for c in cfgs:
+                        try:
+                            m, _g, e = V2BoardConnector(c).move_users_to_group(toks, group_name)
+                            if e and panel in panel_cfg:
+                                errs.append(f"{panel}: {e}")
+                            moved += m
+                        except Exception as ex:  # noqa: BLE001
+                            if panel in panel_cfg:
+                                errs.append(f"{panel}: {ex}")
+                msg = f"已确认 {len(tokens)} 个内鬼(入库), 移入「{group_name}」组 {moved} 个"
+                if errs:
+                    msg += " · 问题: " + "; ".join(errs[:4])
+                self._to("/prefix?msg=" + quote(msg)); return
             if path == "/insiders/to-group":
                 group_name = (form.get("group_name", "") or "").strip() or "Lv.spy"
                 store.set_kv("spy_group_name", group_name)

@@ -659,6 +659,25 @@ class Store:
                 out.add(r["token"])
         return out
 
+    def users_matching_email_prefixes(self, subs, limit=3000):
+        """邮箱含任一前缀/关键词的账号(排除已在内鬼库的)。返回 [{token,email,panel,hit}]。供前缀审查。"""
+        subs = [s.strip().lower() for s in (subs or []) if s and s.strip()]
+        if not subs:
+            return []
+        ins = self.insider_tokens()
+        seen, out = set(), []
+        for s in subs:
+            for r in self.conn.execute(
+                    "SELECT token, email, panel FROM users "
+                    "WHERE email IS NOT NULL AND lower(email) LIKE ? ORDER BY email LIMIT ?",
+                    (f"%{s}%", limit)):
+                t = r["token"]
+                if t in ins or t in seen:
+                    continue
+                seen.add(t)
+                out.append({"token": t, "email": r["email"], "panel": r["panel"] or "", "hit": s})
+        return out
+
     def ip_panel_map(self) -> dict:
         """每个拉取 IP 出现在哪些面板(src)。用于「跨面板同IP」信号。"""
         out: dict = {}
