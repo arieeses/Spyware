@@ -34,3 +34,8 @@ data/*.mmdb
 
 # 设计文档不进仓库(本地/私有留存)
 docs/
+
+# 自有基础设施 / 每台部署各自维护, 不纳入 git(避免 pull 冲突)
+data/self_ips.txt
+data/ua_self.txt
+data/proxy_ips.txt
