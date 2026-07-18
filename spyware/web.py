@@ -1132,6 +1132,16 @@ def _count_cidrs(text: str) -> int:
     return sum(1 for ln in text.splitlines() if ln.split("#", 1)[0].strip())
 
 
+def _feed_file_lines(path: str) -> list:
+    """读一个清单文件的有效行(去空行/# 注释/行内注释), 供 feed 下发白名单。"""
+    out = []
+    for ln in _read_file(path).splitlines():
+        v = ln.split("#", 1)[0].strip()
+        if v:
+            out.append(v)
+    return out
+
+
 def _append_hosting_keywords(keywords) -> int:
     """把机房组织名(大写)追加到机房关键词文件, 去重, 返回新增条数。"""
     path = CONFIG.asn_hosting_kw_file
@@ -2263,6 +2273,8 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
     # 当前 feed 会下发的量(与 /api/gateway_feed 同源, 便于确认名单已生效)
     kc = store.signature_kind_counts() if store else {}   # 一条 GROUP BY, 不载入全部特征
     n_ip, n_ua, n_asn, n_org = kc.get("ip", 0), kc.get("ua", 0), kc.get("asn", 0), kc.get("org", 0)
+    n_allow_ip = len(_feed_file_lines(CONFIG.self_ips_file)) + len(_feed_file_lines(CONFIG.proxy_ips_file))
+    n_allow_ua = len(_feed_file_lines(CONFIG.ua_self_file))
     emails = [r["value"] for r in store.list_signatures_page("email", "", limit=100000, offset=0)
               if r["value"]] if store else []
     try:
@@ -2305,6 +2317,11 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
         <div><div class="dim small">ASN</div><div style="font-size:22px;font-weight:600">{n_asn}</div></div>
         <div><div class="dim small">机房名称</div><div style="font-size:22px;font-weight:600">{n_org}</div></div>
         <div><div class="dim small">UA</div><div style="font-size:22px;font-weight:600">{n_ua}</div></div>
+      </div>
+      <div class="dim small" style="margin:0 0 10px;padding:8px 10px;border-left:3px solid #2f9e44;background:var(--bg)">
+        <b>自有基础设施白名单</b>随 feed 一起下发, 网关<b>绝对放行</b>(优先级最高, 连内鬼名单都盖不过)——
+        你自己跑在 AWS 等机房上的服务不会被机房规则误拦。当前:<b>{n_allow_ip}</b> 个自有/反代 IP · <b>{n_allow_ua}</b> 条自有 UA。
+        在<a href="/whitelist?cat=self">黑白名单 · 自有基础设施</a>里增删。
       </div>
       <div class="dim small" style="margin-bottom:6px">拉取地址(给网关配):</div>
       {feed_line}
@@ -2985,10 +3002,15 @@ class Handler(BaseHTTPRequestHandler):
                     poll = max(5, min(3600, int(store.get_kv("gateway_poll_interval", "30") or 30)))
                 except (ValueError, TypeError):
                     poll = 30
+                # 自有基础设施白名单(自有IP/反代IP + 自有UA): 随 feed 下发, 网关绝对放行,
+                # 避免自己跑在 AWS 等机房上的服务被机房规则连带拦掉。即使拦截暂停也照发。
+                allow_ips = _feed_file_lines(CONFIG.self_ips_file) + _feed_file_lines(CONFIG.proxy_ips_file)
+                allow_uas = _feed_file_lines(CONFIG.ua_self_file)
                 if store.get_kv("gateway_feed_enabled", "1") != "1":
-                    # 开关关闭: 下发空名单(网关随之清空 spyware 侧拦截, 等于暂停)
+                    # 开关关闭: 下发空拦截名单(网关随之清空 spyware 侧拦截, 等于暂停); 白名单仍下发
                     self._send(json.dumps({"enabled": False, "interval": poll,
                                            "ips": [], "asns": [], "uas": [], "org_keywords": [], "tokens": [],
+                                           "allow_ips": allow_ips, "allow_uas": allow_uas,
                                            "counts": {"ips": 0, "asns": 0, "uas": 0, "orgs": 0, "tokens": 0}}).encode(),
                                "application/json; charset=utf-8")
                     return
@@ -3003,6 +3025,7 @@ class Handler(BaseHTTPRequestHandler):
                 tokens = sorted(store.insider_tokens() | store.tokens_by_email_substrings(emails))
                 out = {"enabled": True, "interval": poll, "ips": ips, "asns": asns, "uas": uas,
                        "org_keywords": orgs, "tokens": tokens,
+                       "allow_ips": allow_ips, "allow_uas": allow_uas,
                        "counts": {"ips": len(ips), "asns": len(asns), "uas": len(uas),
                                   "orgs": len(orgs), "tokens": len(tokens)}}
                 self._send(json.dumps(out, ensure_ascii=False).encode(), "application/json; charset=utf-8")
