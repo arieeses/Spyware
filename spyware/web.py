@@ -715,9 +715,12 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
         </div>"""
 
     rebuild = ("" if kind == "v2board" else
-               '<form method="post" action="/logs/rebuild" '
-               'onsubmit="return confirm(\'清空全部拉取日志并从头重新导入? 用于修复早期反代IP重复/面板标错的脏数据。日志仍在磁盘, 会重读。\')">'
-               '<button class="btn ghost">🔄 清空并重建</button></form>')
+               '<form method="post" action="/logs/rebuild" style="display:inline"'
+               ' onsubmit="return confirm(\'清空全部拉取日志并从头重新导入? 用于修复早期反代IP重复/面板标错的脏数据。日志仍在磁盘, 会重读。\')">'
+               '<button class="btn ghost">🔄 清空并重建</button></form>'
+               '<form method="post" action="/logs/clear" style="display:inline"'
+               ' onsubmit="return confirm(\'清空全部拉取记录? 不重导, 探针只上报之后的新日志。用于测试后清场。\')">'
+               '<button class="btn ghost">🗑 清空(不重导)</button></form>')
     return f"""{_card_alert(msg, err)}
     <div class="card">
       <div class="card-title">{title}
@@ -3931,6 +3934,11 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:  # noqa: BLE001
                         pass
                 self._to("/panels/log?msg=" + quote("已清空并触发重建: 探针源约数秒内从头重读, 本地源已重导"))
+                return
+            if path == "/logs/clear":
+                # 纯清空全部拉取记录, 不重导。探针从当前 offset 继续, 只上报之后的新行。
+                n = store.clear_pulls()
+                self._to("/panels/log?msg=" + quote(f"已清空全部拉取记录 {n} 条(不重导; 探针只上报之后的新日志)"))
                 return
             if path == "/settings/password":
                 if not auth.verify_password(form.get("old", ""), admin["salt"], admin["pwd_hash"]):
