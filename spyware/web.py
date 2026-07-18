@@ -692,6 +692,16 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
         modals = _log_modals([p["name"] for p in store.list_sources() if p["type"] == "v2board"])
         extra = """
         <div class="card">
+          <div class="card-title">网关日志接入</div>
+          <div class="dim small" style="margin-bottom:8px">上传订阅网关的访问日志(<code>logs/&lt;面板&gt;/access-*.log</code>)。
+          网关只记 token 哈希, 面板按哈希还原成账号 → 记成拉取记录(<b>真实客户端 IP</b> 比 v2board 更准, 因网关做了 XFF 解析)。按日志里的面板名自动归属。</div>
+          <form method="post" action="/gwlog/import" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="file" name="files" multiple accept=".log,.txt,.json" style="font-size:12px;max-width:300px">
+            <button class="btn ghost sm">导入网关日志</button>
+            <span class="dim small">可多选多天/多面板的日志文件, 自动去重</span>
+          </form>
+        </div>
+        <div class="card">
           <div class="card-title">远程面板如何接入(探针)</div>
           <div class="dim small" style="line-height:1.9">
             右上「＋ 添加」→ 探针接入, 添加后点该行「复制安装命令」在<b>面板服务器</b>执行:
@@ -3346,6 +3356,26 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._to("/settings?err=" + quote(err or "导入失败"))
             return
+
+        # 网关日志导入(multipart; 需在 form 解析前拦截)
+        if path == "/gwlog/import":
+            added = matched = unmatched = 0
+            try:
+                admin = self._admin(store)
+                if admin is None:
+                    self._to("/login"); return
+                files = _extract_multipart_files(self.headers.get("Content-Type", ""), raw)
+                text = "\n".join(b.decode("utf-8", "replace") for b in files)
+                from .runner import ingest_gateway_text
+                added, matched, unmatched = ingest_gateway_text(store, text)
+            finally:
+                store.close()
+            if not matched and not unmatched:
+                self._to("/panels/log?err=" + quote("未读到网关订阅日志(空文件/格式不符)")); return
+            msg = f"网关日志: 新增拉取 {added} 条(匹配账号 {matched} 条, 去重 {matched - added} 条)"
+            if unmatched:
+                msg += f"; {unmatched} 条 token 匹配不到账号(未同步/已删)"
+            self._to("/panels/log?msg=" + quote(msg)); return
 
         # 特征库文件导入(multipart, 多文件/文件夹; 需在 form 解析前拦截)
         if path == "/featlib/import":

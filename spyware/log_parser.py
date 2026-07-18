@@ -204,3 +204,51 @@ def parse_file(path: str, proxy_nets=None) -> Iterator[PullRecord]:
             rec = parse_line(line, proxy_nets)
             if rec is not None:
                 yield rec
+
+
+_GW_TS = re.compile(r"(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})")
+
+
+def _parse_gw_ts(s: str) -> Optional[datetime]:
+    """网关日志 time 是 ISO8601 UTC(如 2026-07-18T07:44:33.196Z), 取到秒, 按 UTC。"""
+    m = _GW_TS.search(s or "")
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1) + " " + m.group(2),
+                                 "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def parse_gateway_line(line: str, hash_map: dict):
+    """解析订阅网关的 JSON 访问日志一行 → (PullRecord|None, 面板名, kind)。
+    网关只记 token 的 SHA256, 靠 hash_map({sha256: token}) 还原成账号。
+    kind: 'ok'(成功) / 'no_token'(非订阅) / 'unmatched'(有token但匹配不到账号) / 'bad'。"""
+    import json as _json
+    s = (line or "").strip()
+    if not s or s[0] != "{":
+        return None, "", "bad"
+    try:
+        d = _json.loads(s)
+    except (ValueError, TypeError):
+        return None, "", "bad"
+    if d.get("type") != "access":
+        return None, "", "bad"
+    h = (d.get("query_token_hash") or "").strip()
+    if not h:
+        return None, "", "no_token"          # 非订阅(无 token)
+    token = hash_map.get(h)
+    if not token:
+        return None, "", "unmatched"         # 匹配不到账号(未知/未同步的 token)
+    ts = _parse_gw_ts(d.get("time"))
+    ip = (d.get("client_ip") or "").strip()
+    if ts is None or not ip:
+        return None, "", "bad"
+    try:
+        status = int(d.get("status") or 200)
+    except (ValueError, TypeError):
+        status = 200
+    rec = PullRecord(ts=ts, ip=ip, status=status, request_time=0.0,
+                     ua=(d.get("user_agent") or ""), token=token, uri=(d.get("path") or ""))
+    return rec, (d.get("panel") or ""), "ok"

@@ -84,6 +84,30 @@ def ingest_logfile(store: Store, path_spec: str, reset: bool = False,
     return total, nfiles, 0
 
 
+def ingest_gateway_text(store: Store, text: str) -> Tuple[int, int, int]:
+    """导入订阅网关的 JSON 访问日志(每行一条)。按 token 哈希还原成账号, 按日志里的
+    面板名分别归属。返回 (新增拉取条数, 解析出的记录数, 匹配不到账号的行数)。"""
+    from .log_parser import parse_gateway_line
+    hmap = store.token_sha256_map()
+    by_panel: dict = {}
+    matched = unmatched = 0
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line[0] != "{":
+            continue
+        rec, panel, kind = parse_gateway_line(line, hmap)
+        if kind == "unmatched":
+            unmatched += 1
+        if rec is None:
+            continue
+        matched += 1
+        by_panel.setdefault(panel or "网关", []).append(rec)
+    added = 0
+    for panel, recs in by_panel.items():
+        added += store.add_pulls(recs, src=panel)
+    return added, matched, unmatched
+
+
 def sync_v2board(store: Store, cfg: dict, panel: str = None):
     """返回 (用户数, 协议列表, 节点数, 中转数)。节点/协议探测失败不影响用户同步。"""
     from .connectors.v2board import V2BoardConnector

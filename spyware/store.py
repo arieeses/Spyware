@@ -560,6 +560,15 @@ class Store:
         rows = self.conn.execute("SELECT DISTINCT token FROM pulls").fetchall()
         return [r["token"] for r in rows]
 
+    def token_sha256_map(self) -> dict:
+        """{sha256(token)十六进制: token}, 供网关日志(只记token哈希)按哈希还原成账号。"""
+        import hashlib
+        out = {}
+        for r in self.conn.execute("SELECT token FROM users WHERE token IS NOT NULL AND token<>''"):
+            t = r["token"]
+            out[hashlib.sha256(t.encode("utf-8")).hexdigest()] = t
+        return out
+
     def pulls_for(self, token: str):
         return self.conn.execute(
             "SELECT * FROM pulls WHERE token=? ORDER BY ts", (token,)
