@@ -1196,7 +1196,8 @@ def _asn_db_card() -> str:
     </form>"""
 
 
-_SIG_KIND_CN = {"ip": "IP / CIDR", "ua": "UA(正则/子串)", "asn": "ASN 号", "email": "邮箱(子串)"}
+_SIG_KIND_CN = {"ip": "IP / CIDR", "ua": "UA(正则/子串)", "asn": "ASN 号", "email": "邮箱(子串)",
+                "org": "机房名称"}
 
 
 def _guess_sig_kind(v: str) -> str:
@@ -1224,12 +1225,13 @@ def _parse_sig_lines(text: str, kind: str = "auto"):
     return out
 
 
-_SIG_KINDS = [("all", "全部"), ("ip", "IP·CIDR"), ("ua", "UA"), ("asn", "ASN"), ("email", "邮箱")]
+_SIG_KINDS = [("all", "全部"), ("ip", "IP·CIDR"), ("ua", "UA"), ("asn", "ASN"),
+              ("org", "机房名称"), ("email", "邮箱")]
 
 
 def render_featurelib(store, msg="", err="", search="", kind="all", size="10", page="1", batch="") -> str:
     s = (search or "").strip()
-    if kind not in ("all", "ip", "ua", "asn", "email"):
+    if kind not in ("all", "ip", "ua", "asn", "email", "org"):
         kind = "all"
     if str(size) not in ("10", "50", "100", "150", "500"):
         size = "10"
@@ -1311,9 +1313,10 @@ def render_featurelib(store, msg="", err="", search="", kind="all", size="10", p
           <option value="ip">IP / CIDR</option>
           <option value="ua">UA(正则/子串)</option>
           <option value="asn">ASN 号(如 AS45090)</option>
+          <option value="org">机房名称(组织名关键词)</option>
           <option value="email">邮箱(子串)</option>
         </select>
-        <input name="value" required placeholder="特征值, 如 1.2.3.0/24 / Surfboard / AS4134 / @example.com"
+        <input name="value" required placeholder="特征值, 如 1.2.3.0/24 / Surfboard / AS4134 / Alibaba / @example.com"
                style="flex:1;min-width:240px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
         <input name="note" placeholder="备注(选填)" style="width:160px;padding:6px 10px;border:1px solid #d5dae1;border-radius:6px">
         <button class="btn">添加</button>
@@ -1343,6 +1346,7 @@ def render_featurelib(store, msg="", err="", search="", kind="all", size="10", p
               <option value="auto">自动识别(逐行)</option>
               <option value="ip">全部当 IP / CIDR</option>
               <option value="ua">全部当 UA</option>
+              <option value="org">全部当机房名称</option>
               <option value="asn">全部当 ASN</option>
               <option value="email">全部当邮箱</option>
             </select>
@@ -2193,7 +2197,8 @@ def _update_card() -> str:
     </div>"""
 
 
-_COND_CN = {"email": "邮箱前缀", "ip": "精确IP", "subnet": "网段", "ua": "UA", "asn": "机房ASN"}
+_COND_CN = {"email": "邮箱前缀", "ip": "精确IP", "subnet": "网段", "ua": "UA", "asn": "机房ASN",
+            "org": "机房名称"}
 
 
 def _rule_preview(hist: dict, conds) -> int:
@@ -2257,7 +2262,7 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
     hist_js = _json.dumps(hist, ensure_ascii=False)
     # 当前 feed 会下发的量(与 /api/gateway_feed 同源, 便于确认名单已生效)
     kc = store.signature_kind_counts() if store else {}   # 一条 GROUP BY, 不载入全部特征
-    n_ip, n_ua, n_asn = kc.get("ip", 0), kc.get("ua", 0), kc.get("asn", 0)
+    n_ip, n_ua, n_asn, n_org = kc.get("ip", 0), kc.get("ua", 0), kc.get("asn", 0), kc.get("org", 0)
     emails = [r["value"] for r in store.list_signatures_page("email", "", limit=100000, offset=0)
               if r["value"]] if store else []
     try:
@@ -2298,6 +2303,7 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
         <div><div class="dim small">token</div><div style="font-size:22px;font-weight:600">{n_tok}</div></div>
         <div><div class="dim small">IP</div><div style="font-size:22px;font-weight:600">{n_ip}</div></div>
         <div><div class="dim small">ASN</div><div style="font-size:22px;font-weight:600">{n_asn}</div></div>
+        <div><div class="dim small">机房名称</div><div style="font-size:22px;font-weight:600">{n_org}</div></div>
         <div><div class="dim small">UA</div><div style="font-size:22px;font-weight:600">{n_ua}</div></div>
       </div>
       <div class="dim small" style="margin-bottom:6px">拉取地址(给网关配):</div>
@@ -2338,6 +2344,7 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
           <label class="rk"><input type="checkbox" name="c" value="subnet" onchange="ruleCalc()"> 网段</label>
           <label class="rk"><input type="checkbox" name="c" value="ua" onchange="ruleCalc()"> UA</label>
           <label class="rk"><input type="checkbox" name="c" value="asn" onchange="ruleCalc()"> 机房ASN</label>
+          <label class="rk"><input type="checkbox" name="c" value="org" onchange="ruleCalc()"> 机房名称</label>
           <span id="rulehint" class="dim small" style="margin-left:8px"></span>
           <div style="margin-top:10px"><button class="btn sm" id="rulebtn" disabled>新建规则</button></div>
         </form>
@@ -2354,7 +2361,7 @@ def render_gateway(store, msg="", err="", tab="feed") -> str:
         var cs = Array.prototype.filter.call(document.querySelectorAll('#rulef input[name=c]'), function(x){{return x.checked;}}).map(function(x){{return x.value;}});
         var btn = document.getElementById('rulebtn'), hint = document.getElementById('rulehint');
         if (cs.length === 0) {{ btn.disabled = true; hint.textContent = ''; return 0; }}
-        if (cs.length === 1 && cs[0] === 'asn') {{ btn.disabled = true; hint.textContent = '机房ASN 不能单独成规则'; return 0; }}
+        if (cs.length === 1 && (cs[0] === 'asn' || cs[0] === 'org')) {{ btn.disabled = true; hint.textContent = '机房ASN/机房名称 太宽, 不能单独成规则'; return 0; }}
         var n = 0;
         for (var k in HIST) {{ var ks = k ? k.split(',') : []; if (cs.every(function(c){{return ks.indexOf(c) >= 0;}})) n += HIST[k]; }}
         btn.disabled = false; hint.textContent = '预计命中 ' + n + ' 个账号(新建后默认关闭)';
@@ -2981,8 +2988,8 @@ class Handler(BaseHTTPRequestHandler):
                 if store.get_kv("gateway_feed_enabled", "1") != "1":
                     # 开关关闭: 下发空名单(网关随之清空 spyware 侧拦截, 等于暂停)
                     self._send(json.dumps({"enabled": False, "interval": poll,
-                                           "ips": [], "asns": [], "uas": [], "tokens": [],
-                                           "counts": {"ips": 0, "asns": 0, "uas": 0, "tokens": 0}}).encode(),
+                                           "ips": [], "asns": [], "uas": [], "org_keywords": [], "tokens": [],
+                                           "counts": {"ips": 0, "asns": 0, "uas": 0, "orgs": 0, "tokens": 0}}).encode(),
                                "application/json; charset=utf-8")
                     return
                 sigs = store.list_signatures()
@@ -2991,10 +2998,13 @@ class Handler(BaseHTTPRequestHandler):
                 asns = sorted({int(re.sub(r"(?i)^as", "", (r["value"] or "").strip()))
                                for r in sigs if r["kind"] == "asn"
                                and re.sub(r"(?i)^as", "", (r["value"] or "").strip()).isdigit()})
+                orgs = sorted({r["value"] for r in sigs if r["kind"] == "org" and r["value"]})
                 emails = [r["value"] for r in sigs if r["kind"] == "email" and r["value"]]
                 tokens = sorted(store.insider_tokens() | store.tokens_by_email_substrings(emails))
-                out = {"enabled": True, "interval": poll, "ips": ips, "asns": asns, "uas": uas, "tokens": tokens,
-                       "counts": {"ips": len(ips), "asns": len(asns), "uas": len(uas), "tokens": len(tokens)}}
+                out = {"enabled": True, "interval": poll, "ips": ips, "asns": asns, "uas": uas,
+                       "org_keywords": orgs, "tokens": tokens,
+                       "counts": {"ips": len(ips), "asns": len(asns), "uas": len(uas),
+                                  "orgs": len(orgs), "tokens": len(tokens)}}
                 self._send(json.dumps(out, ensure_ascii=False).encode(), "application/json; charset=utf-8")
                 return
 
@@ -3536,7 +3546,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/featlib/add":
                 kind = form.get("kind", "ip")
                 value = form.get("value", "").strip()
-                if kind in ("ip", "ua", "asn", "email") and value:
+                if kind in ("ip", "ua", "asn", "email", "org") and value:
                     store.add_signature(kind, value, form.get("note", ""))
                     self._to("/featlib?msg=" + quote("已添加特征"))
                 else:
@@ -3544,7 +3554,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/featlib/batch-add":
                 kind = form.get("kind", "auto")
-                if kind not in ("auto", "ip", "ua", "asn", "email"):
+                if kind not in ("auto", "ip", "ua", "asn", "email", "org"):
                     kind = "auto"
                 items = _parse_sig_lines(form.get("text", ""), kind)
                 added = store.add_signatures_bulk(items) if items else 0
@@ -3811,8 +3821,8 @@ class Handler(BaseHTTPRequestHandler):
                 conds = sorted({c for c in formq.get("c", []) if c in store._VALID_COND})
                 if not conds:
                     self._to("/gateway?tab=rules&err=" + quote("未选择特征")); return
-                if conds == ["asn"]:
-                    self._to("/gateway?tab=rules&err=" + quote("机房ASN 不能单独成规则, 请和别的特征组合")); return
+                if conds in (["asn"], ["org"]):
+                    self._to("/gateway?tab=rules&err=" + quote("机房ASN/机房名称 太宽, 不能单独成规则, 请和别的特征组合")); return
                 rules = store.get_auto_insider_rules()
                 rid = "+".join(conds)
                 if any((r.get("id") or "+".join(r.get("conds") or [])) == rid for r in rules):

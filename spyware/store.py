@@ -1018,7 +1018,7 @@ class Store:
     # —— 自动入库规则(命中特征库 → 移入内鬼库) ——
     # 规则 = {"id","conds":[类型...],"on":bool}; conds 全命中(AND)才触发, 规则间 OR。
     # 类型取自 {'email','ip','ua','asn'}。存 kv auto_insider_rules(JSON)。
-    _VALID_COND = {"email", "ip", "subnet", "ua", "asn"}
+    _VALID_COND = {"email", "ip", "subnet", "ua", "asn", "org"}
 
     def get_auto_insider_rules(self):
         import json as _json

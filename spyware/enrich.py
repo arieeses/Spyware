@@ -172,6 +172,7 @@ class FeatureLib:
         self.ua_pats: List[str] = []
         self.asns = set()
         self.emails: List[str] = []
+        self.orgs: List[str] = []       # 机房名称(ASN 组织名关键词, 小写子串)
         self.exempt_nets = _load_cidrs(CONFIG.self_ips_file) + _load_cidrs(CONFIG.proxy_ips_file)
         if _rows is None:
             try:
@@ -183,7 +184,7 @@ class FeatureLib:
             if not v:
                 continue
             self._add(k, v)
-        self.empty = not (self.ip_nets or self.ua_pats or self.asns or self.emails)
+        self.empty = not (self.ip_nets or self.ua_pats or self.asns or self.emails or self.orgs)
 
     def _add(self, k, v):
         if k == "ip":
@@ -199,6 +200,8 @@ class FeatureLib:
                 self.asns.add(int(vv))
         elif k == "email":
             self.emails.append(str(v).lower())
+        elif k == "org":
+            self.orgs.append(str(v).lower())
 
     @classmethod
     def from_insiders(cls, store):
@@ -240,10 +243,16 @@ class FeatureLib:
             for n in self.ip_nets:
                 if addr in n:
                     add(f"IP {ip}" if n.num_addresses == 1 else f"IP段 {n}")
-            if self.asns and asndb is not None:
-                asn, _ = asndb.lookup(ip)
+            if (self.asns or self.orgs) and asndb is not None:
+                asn, org = asndb.lookup(ip)
                 if asn in self.asns:
                     add(f"AS{asn}")
+                if org and self.orgs:
+                    ol = org.lower()
+                    for kw in self.orgs:
+                        if kw in ol:
+                            add(f"机房 {org}")
+                            break
         for ua in uas or ():
             for p in self.ua_pats:
                 try:
@@ -277,10 +286,13 @@ class FeatureLib:
             for n in self.ip_nets:
                 if addr in n:
                     kinds.add("ip" if n.num_addresses == 1 else "subnet")
-            if "asn" not in kinds and self.asns and asndb is not None:
-                asn, _ = asndb.lookup(ip)
+            if ((("asn" not in kinds and self.asns) or ("org" not in kinds and self.orgs))
+                    and asndb is not None):
+                asn, org = asndb.lookup(ip)
                 if asn in self.asns:
                     kinds.add("asn")
+                if org and self.orgs and any(kw in org.lower() for kw in self.orgs):
+                    kinds.add("org")
         if "ua" not in kinds:
             for ua in uas or ():
                 for p in self.ua_pats:
