@@ -1,76 +1,105 @@
 # ============================================================
-# sub-gateway 本地开发配置（可直接 npm start 运行）
-# 生产部署请用 config.example.yaml：开启 TLS(IP 证书) 与 GeoLite2。
-# 每个功能开关的含义见下方【开关】注释。
+# sub-gateway 生产配置(已把 insider_feed / 面板名 / 按面板日志 填好)
+# 剩下标 ★TODO 的是"只有你知道"的部署信息, 替换后即可上线。
 # ============================================================
 
 server:
-  # 对外监听 host:port。多端口写法见 config.example.yaml：
-  #   listen: ["127.0.0.1:8080", "127.0.0.1:8082"]   或   listeners: [...]
+  # ★TODO 监听地址。两种部署二选一:
+  #   A) 网关在 Nginx/CDN 后面(推荐): 网关只监听本机, Nginx 转发过来
+  #   B) 网关直接对外(自己终止 TLS): listen: "0.0.0.0:443" + tls.enabled: true + 证书
   listen: "127.0.0.1:1919"
 
-  # 【开关】拒绝直连
-  #   true  = 只接受 trusted_proxies 来源，其它直连 403（生产必开）
-  #   false = 允许任意来源直连（本地开发用，取 remote_addr 作 client_ip）
+  # 生产必开: 只信任 trusted_proxies 来的请求, 其它直连一律 403
   reject_direct_access: true
 
-  # 回源超时（秒），超时按回源失败处理
   origin_timeout_seconds: 10
-
-  # 回源响应体最大字节数，超出即中断
-  max_origin_response_bytes: 5242880   # 5 MB
-
-  # 【开关】允许的 HTTP 方法白名单，不在列表内返回 405
+  max_origin_response_bytes: 5242880
   allowed_methods: ["GET", "HEAD"]
 
   tls:
-    # 【开关】对外 TLS
-    #   true  = HTTPS 监听（需 IP 证书），false = 纯 HTTP 监听
-    #   本地开发用 HTTP；生产改 true 并配置证书
+    # 部署 A(Nginx 终止 TLS)填 false; 部署 B(网关自己终止)填 true 并给证书
     enabled: false
-    # cert_path: "./certs/server.crt"   # enabled=true 时启用
-    # key_path: "./certs/server.key"
+    # cert_path: "/etc/ssl/gateway/fullchain.pem"
+    # key_path:  "/etc/ssl/gateway/privkey.pem"
 
-  # 【开关】内部接口监听（仅本机；留空则不启动内部接口）
-  #   承载 /-/health /-/ready /-/reload，不套用 reject_direct_access
   internal_listen: "127.0.0.1:8081"
+  # ★TODO 换成长随机串(生成: openssl rand -hex 24)
+  reload_token: "CHANGE_ME_RANDOM_HEX"
 
-  # /-/reload 热重载接口 Bearer Token（生产务必换长随机串）
-  reload_token: "dev-reload-token"
-
-# 可信代理来源（单 IP 或 CIDR）。仅这些来源的转发头被信任
+# ★TODO 可信代理来源。部署 A 填你的 Nginx/CDN 出口 IP(单 IP 或 CIDR);
+#        网关和 Nginx 同机就填 127.0.0.1
 trusted_proxies:
   - "127.0.0.1"
 
-# 【开关/模式】回源失败时的行为
-#   "fake"  = 返回假订阅（隐蔽，推荐）
-#   "error" = 返回 502（便于排障）
 origin_failure_mode: "fake"
 
 rate_limit:
-  # 【开关】按 client_ip 令牌桶限流（true=启用 / false=不限流）
   enabled: true
-  requests_per_minute: 120   # 稳态每分钟请求数
-  burst: 40                  # 突发桶容量
+  requests_per_minute: 120
+  burst: 40
 
 fake_latency:
-  # 【开关】假订阅随机延迟（抗时序探测）
-  #   true=返回假订阅前随机等待 min_ms~max_ms 模拟回源耗时
-  #   false=立即返回（开发调试方便，但时延差异可被探测）
-  enabled: true
+  enabled: true        # 生产开启, 抗时序探测
   min_ms: 80
   max_ms: 300
 
-# 【模式】私有/保留地址判定：fake（假订阅）/ proxy（放行）/ allowlist（视同白名单）
 private_ip_decision: "fake"
 
-# 源站路由表：Host -> base_url。未命中 Host 返回 404
+# 访问日志按面板分文件夹: logs/<面板名>/access-YYYY-MM-DD.log
+#   面板名 = origins.<host>.name。查某面板拦截: grep '"decision":"fake"' logs/彩虹云/access-*.log
+access_log:
+  dir: "./data"        # 开启; 留空则只打 stdout
+  stdout: true         # 是否同时打 stdout(给 pm2/journald); 想只落文件设 false
+
+# 源站路由表: 网关对外域名(Host) -> 机场。
+#   name       = 面板名(用于按面板分日志文件夹, 请核对下面推断是否正确)
+#   base_url   = 该机场真实订阅源站
+#   decoy_host = 命中风险时转发的诱饵机(可用但牺牲的订阅)
 origins:
-  test.0318.cyou:
+  chspy.osone.top:
+    name: "ch"
+    tenant_id: "ch"
+    base_url: "https://blog.cauu.top"
+    decoy_host: "chch.vvoocc.top"
+  fnspy.osone.top:
+    name: "fn"
+    tenant_id: "fn"
+    base_url: "https://blog.fnyok.com"
+    decoy_host: "fnfn.vvoocc.top"
+  knspy.osone.top:
+    name: "kn"
+    tenant_id: "kn"
+    base_url: "https://blog.bnkn.cc"
+    decoy_host: "knkn.vvoocc.top"
+  lyspy.osone.top:
+    name: "ly"
+    tenant_id: "ly"
     base_url: "https://ep.0318.cyou"
     decoy_host: "lyly.vvoocc.top"
+  qcspy.osone.top:
+    name: "qc"
+    tenant_id: "qc"
+    base_url: "https://blog.senev1818.com"
+    decoy_host: "qcqc.vvoocc.top"
+  uyspy.osone.top:
+    name: "uy"
+    tenant_id: "uy"
+    base_url: "https://www.uuya.net"
+    decoy_host: "uyuy.vvoocc.top"
+  hdspy.osone.top:
+    name: "hd"
+    tenant_id: "hd"
+    base_url: "https://blog.hdycco.com"
+    decoy_host: "hdhd.vvoocc.top"
+  respy.osone.top:
+    name: "re"
+    tenant_id: "re"
+    base_url: "https://blog.rocket8888.com"
+    decoy_host: "rere.vvoocc.top"
+  # ★TODO Gear 机场若也走这个网关, 照上面格式补一段(name/base_url/decoy_host)
 
-# 白名单：ip/cidr/asn 任一命中永远返回真订阅（优先级最高）
+# 白名单: ip/cidr/asn 任一命中永远真订阅。注意: 自有IP/UA 已由 spyware feed
+# 下发(自动放行), 这里一般留空; 只在你想额外放行、又不进面板时才填。
 allowlist:
   ips: []
   cidrs: []
@@ -78,19 +107,16 @@ allowlist:
 
 cloud_detection:
   geoip:
-    # 【开关】GeoLite2 ASN 检测（主检测手段）
-    #   true  = 加载 mmdb 并每请求查 ASN（需提供 GeoLite2-ASN.mmdb）
-    #   false = 跳过 ASN 检测，只靠 CIDR 兜底（本地无 mmdb 时用 false）
     enabled: true
+    # ★TODO 放一个 GeoLite2-ASN.mmdb 到这个路径(spyware 设置页也能下)
     db_path: "./data/GeoLite2-ASN.mmdb"
-    # 按 ASN 号码拦截（最精确）
     block_asns:
       - 16509      # Amazon AWS
       - 8075       # Microsoft
       - 15169      # Google
       - 45102      # Alibaba
       - 132203     # Tencent
-    # 按 ASN 组织名关键词拦截（兜底，不区分大小写）
+      - 135377     # UCloud
     block_asn_keywords:
       - "Alibaba"
       - "Aliyun"
@@ -107,32 +133,35 @@ cloud_detection:
       - "Hetzner"
       - "Vultr"
       - "OVH"
+      - "UCloud"
   cidr:
-    # 【开关】CIDR 兜底检测（true=加载网段文件匹配 / false=关闭）
     enabled: true
     files:
       - "./data/cloud_ipv4.txt"
       - "./data/cloud_ipv6.txt"
 
-# 假订阅元信息头（抗探测，与真订阅一致）
+# 内鬼 Feed —— 已按你的面板填好, 直接用
+insider_feed:
+  enabled: true
+  url: "https://solo.clavin.top/api/gateway_feed"
+  key: "0840065fc07b28260072ae302a1bade0"
+  interval_seconds: 30      # 初始值; 之后自动跟随面板「网关轮询间隔」
+  timeout_seconds: 5
+
 fake_subscription:
-  # 【开关】真实 userinfo：节点假、到期/流量真（向源站拉 subscription-userinfo 头）。
-  # 本地开发默认关闭；生产建议开启（见 config.example.yaml 说明）。
   real_userinfo:
-    enabled: false
+    enabled: true           # 生产开启: 假节点但到期/流量为真, 更难被察觉
     cache_ttl_seconds: 300
     timeout_seconds: 5
-  userinfo:                        # 静态兜底，写进 subscription-userinfo 头
+  userinfo:                 # 拿不到真实 userinfo 时的兜底
     upload: 123456789
     download: 987654321
     total: 107374182400
-    expire: 0                      # 0 = 不过期
-  profile_update_interval: 24      # 写进 profile-update-interval 头（小时）
-  filename: "subscribe"            # content-disposition 文件名
+    expire: 0
+  profile_update_interval: 24
+  filename: "subscribe"
 
-# 假节点列表：风险用户命中后，按其客户端类型渲染成对应格式的假订阅。
-# 至少 1 个节点；type 支持 vmess / vless / trojan / shadowsocks(ss)。
-# 用假地址/假凭据即可，不要填真实源站。
+# ★TODO 假节点: 填几个"看起来正常但全是假地址/假凭据"的节点(别填真源站)
 fake_nodes:
   - name: "香港 01"
     type: "vmess"

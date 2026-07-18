@@ -3004,13 +3004,14 @@ class Handler(BaseHTTPRequestHandler):
                     poll = 30
                 # 自有基础设施白名单(自有IP/反代IP + 自有UA): 随 feed 下发, 网关绝对放行,
                 # 避免自己跑在 AWS 等机房上的服务被机房规则连带拦掉。即使拦截暂停也照发。
-                allow_ips = _feed_file_lines(CONFIG.self_ips_file) + _feed_file_lines(CONFIG.proxy_ips_file)
+                relay_ips = _feed_file_lines(CONFIG.proxy_ips_file)   # 反代/中转 IP(上层反代), 网关 XFF 解析时跳过
+                allow_ips = _feed_file_lines(CONFIG.self_ips_file) + relay_ips
                 allow_uas = _feed_file_lines(CONFIG.ua_self_file)
                 if store.get_kv("gateway_feed_enabled", "1") != "1":
-                    # 开关关闭: 下发空拦截名单(网关随之清空 spyware 侧拦截, 等于暂停); 白名单仍下发
+                    # 开关关闭: 下发空拦截名单(网关随之清空 spyware 侧拦截, 等于暂停); 白名单/反代仍下发
                     self._send(json.dumps({"enabled": False, "interval": poll,
                                            "ips": [], "asns": [], "uas": [], "org_keywords": [], "tokens": [],
-                                           "allow_ips": allow_ips, "allow_uas": allow_uas,
+                                           "allow_ips": allow_ips, "allow_uas": allow_uas, "relay_ips": relay_ips,
                                            "counts": {"ips": 0, "asns": 0, "uas": 0, "orgs": 0, "tokens": 0}}).encode(),
                                "application/json; charset=utf-8")
                     return
@@ -3025,7 +3026,7 @@ class Handler(BaseHTTPRequestHandler):
                 tokens = sorted(store.insider_tokens() | store.tokens_by_email_substrings(emails))
                 out = {"enabled": True, "interval": poll, "ips": ips, "asns": asns, "uas": uas,
                        "org_keywords": orgs, "tokens": tokens,
-                       "allow_ips": allow_ips, "allow_uas": allow_uas,
+                       "allow_ips": allow_ips, "allow_uas": allow_uas, "relay_ips": relay_ips,
                        "counts": {"ips": len(ips), "asns": len(asns), "uas": len(uas),
                                   "orgs": len(orgs), "tokens": len(tokens)}}
                 self._send(json.dumps(out, ensure_ascii=False).encode(), "application/json; charset=utf-8")
