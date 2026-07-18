@@ -693,13 +693,17 @@ def render_source_page(store: Store, kind: str, msg: str = "", err: str = "") ->
         extra = """
         <div class="card">
           <div class="card-title">网关日志接入</div>
-          <div class="dim small" style="margin-bottom:8px">上传订阅网关的访问日志(<code>logs/&lt;面板&gt;/access-*.log</code>)。
-          网关只记 token 哈希, 面板按哈希还原成账号 → 记成拉取记录(<b>真实客户端 IP</b> 比 v2board 更准, 因网关做了 XFF 解析)。按日志里的面板名自动归属。</div>
+          <div class="dim small" style="margin-bottom:8px">订阅网关的访问日志(<code>logs/&lt;面板&gt;/access-*.log</code>)。
+          网关只记 token 哈希, 面板按哈希还原成账号 → 记成拉取记录(<b>真实客户端 IP</b> 比 v2board 更准, 因网关做了 XFF 解析)。按日志里的面板名自动归属、去重。</div>
+          <div class="dim small" style="margin-bottom:6px"><b>方式一 · 手动上传</b>(多选多天/多面板):</div>
           <form method="post" action="/gwlog/import" enctype="multipart/form-data" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input type="file" name="files" multiple accept=".log,.txt,.json" style="font-size:12px;max-width:300px">
             <button class="btn ghost sm">导入网关日志</button>
-            <span class="dim small">可多选多天/多面板的日志文件, 自动去重</span>
           </form>
+          <div class="dim small" style="margin-top:10px"><b>方式二 · 探针自动上报</b>(推荐, 实时进面板): 右上「＋ 添加」在<b>网关服务器</b>装探针,
+          日志路径填网关的 logs 通配:
+          <pre class="filebox">/opt/1panel/www/sites/spyware/index/logs/*/access-*.log</pre>
+          探针会自动只上报订阅行(带 token 哈希), 无 token 的轮询/扫描不上报, 省带宽。</div>
         </div>
         <div class="card">
           <div class="card-title">远程面板如何接入(探针)</div>
@@ -3283,17 +3287,14 @@ class Handler(BaseHTTPRequestHandler):
                 src_default = _scfg.get("panel") or src["name"]  # 归属面板优先作分类
                 groups = payload.get("groups")
                 if isinstance(groups, dict) and groups:
-                    # 探针按「归属标签」分组上报: 每组各自打 src 标签(标签空则用面板/数据源名)
-                    n = sent = 0
-                    for label, lines in groups.items():
-                        lines = lines or []
-                        sent += len(lines)
-                        recs = [r for r in (parse_line(ln, pnets) for ln in lines) if r]
-                        n += store.add_pulls(recs, src=(label or src_default))
+                    # 探针按「归属标签」分组上报; v2board 行/网关 JSON 行自动分辨入库
+                    from .runner import ingest_agent_lines
+                    sent = sum(len(v or []) for v in groups.values())
+                    n = ingest_agent_lines(store, groups, None, pnets, default_src=src_default)
                 else:
+                    from .runner import ingest_agent_lines
                     raw = payload.get("logs", []) or []
-                    recs = [r for r in (parse_line(ln, pnets) for ln in raw) if r]
-                    n = store.add_pulls(recs, src=src_default)
+                    n = ingest_agent_lines(store, None, raw, pnets, default_src=src_default)
                     sent = len(raw)
                 met = payload.get("metrics", {}) or {}
                 log_ok = bool(payload.get("log_ok"))

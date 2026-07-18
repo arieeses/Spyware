@@ -108,6 +108,39 @@ def ingest_gateway_text(store: Store, text: str) -> Tuple[int, int, int]:
     return added, matched, unmatched
 
 
+def _is_gateway_line(ln: str) -> bool:
+    return ln[:1] == "{" and '"type":"access"' in ln
+
+
+def ingest_agent_lines(store: Store, groups, flat_lines, proxy_nets, default_src: str = "") -> int:
+    """探针上报的日志行入库。自动区分 v2board 日志(parse_line)与网关 JSON 日志
+    (parse_gateway_line, 按 token 哈希还原, 按行内 panel 归属)。返回新增拉取条数。"""
+    from .log_parser import parse_line, parse_gateway_line
+    items = []
+    if isinstance(groups, dict) and groups:
+        for label, lines in groups.items():
+            for ln in (lines or []):
+                items.append((label, ln))
+    else:
+        for ln in (flat_lines or []):
+            items.append(("", ln))
+    hmap = store.token_sha256_map() if any(_is_gateway_line(ln) for _, ln in items) else {}
+    by_src: dict = {}
+    for label, ln in items:
+        if _is_gateway_line(ln):
+            rec, panel, _kind = parse_gateway_line(ln, hmap)
+            if rec is not None:
+                by_src.setdefault(panel or label or default_src or "网关", []).append(rec)
+        else:
+            rec = parse_line(ln, proxy_nets)
+            if rec is not None:
+                by_src.setdefault(label or default_src, []).append(rec)
+    added = 0
+    for src, recs in by_src.items():
+        added += store.add_pulls(recs, src=src)
+    return added
+
+
 def sync_v2board(store: Store, cfg: dict, panel: str = None):
     """返回 (用户数, 协议列表, 节点数, 中转数)。节点/协议探测失败不影响用户同步。"""
     from .connectors.v2board import V2BoardConnector

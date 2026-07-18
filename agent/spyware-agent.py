@@ -136,7 +136,14 @@ def read_new_file(path, st):
             if not ln:
                 break
             ln = ln.rstrip("\n")
-            if ln and "token=" in ln:   # 只送订阅拉取行, 丢弃海量无 token 的轮询
+            # 只送订阅拉取行, 丢弃海量无 token 的轮询:
+            #   v2board 日志: 含 token= ; 网关 JSON 日志: type:access 且带非空 token 哈希
+            if not ln:
+                continue
+            keep = "token=" in ln
+            if not keep and '"type":"access"' in ln:
+                keep = '"query_token_hash":"' in ln and '"query_token_hash":""' not in ln
+            if keep:
                 lines.append(ln)
         end = f.tell()
     capped = len(lines) >= _MAX_LINES_PER_READ
