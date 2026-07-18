@@ -2974,9 +2974,14 @@ class Handler(BaseHTTPRequestHandler):
                 fk = store.get_kv("gateway_feed_key", "")
                 if not fk or q.get("key", [""])[0] != fk:
                     self._send(b'{"error":"invalid key"}', "application/json; charset=utf-8"); return
+                try:
+                    poll = max(5, min(3600, int(store.get_kv("gateway_poll_interval", "30") or 30)))
+                except (ValueError, TypeError):
+                    poll = 30
                 if store.get_kv("gateway_feed_enabled", "1") != "1":
                     # 开关关闭: 下发空名单(网关随之清空 spyware 侧拦截, 等于暂停)
-                    self._send(json.dumps({"enabled": False, "ips": [], "asns": [], "uas": [], "tokens": [],
+                    self._send(json.dumps({"enabled": False, "interval": poll,
+                                           "ips": [], "asns": [], "uas": [], "tokens": [],
                                            "counts": {"ips": 0, "asns": 0, "uas": 0, "tokens": 0}}).encode(),
                                "application/json; charset=utf-8")
                     return
@@ -2988,7 +2993,7 @@ class Handler(BaseHTTPRequestHandler):
                                and re.sub(r"(?i)^as", "", (r["value"] or "").strip()).isdigit()})
                 emails = [r["value"] for r in sigs if r["kind"] == "email" and r["value"]]
                 tokens = sorted(store.insider_tokens() | store.tokens_by_email_substrings(emails))
-                out = {"ips": ips, "asns": asns, "uas": uas, "tokens": tokens,
+                out = {"enabled": True, "interval": poll, "ips": ips, "asns": asns, "uas": uas, "tokens": tokens,
                        "counts": {"ips": len(ips), "asns": len(asns), "uas": len(uas), "tokens": len(tokens)}}
                 self._send(json.dumps(out, ensure_ascii=False).encode(), "application/json; charset=utf-8")
                 return
