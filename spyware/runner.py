@@ -89,13 +89,14 @@ def ingest_gateway_text(store: Store, text: str) -> Tuple[int, int, int]:
     面板名分别归属。返回 (新增拉取条数, 解析出的记录数, 匹配不到账号的行数)。"""
     from .log_parser import parse_gateway_line
     hmap = store.token_sha256_map()
+    proxy_nets = load_proxy_nets()
     by_panel: dict = {}
     matched = unmatched = 0
     for line in (text or "").splitlines():
         line = line.strip()
         if not line or line[0] != "{":
             continue
-        rec, panel, kind = parse_gateway_line(line, hmap)
+        rec, panel, kind = parse_gateway_line(line, hmap, proxy_nets)
         if kind == "unmatched":
             unmatched += 1
         if rec is None:
@@ -128,7 +129,7 @@ def ingest_agent_lines(store: Store, groups, flat_lines, proxy_nets, default_src
     by_src: dict = {}
     for label, ln in items:
         if _is_gateway_line(ln):
-            rec, panel, _kind = parse_gateway_line(ln, hmap)
+            rec, panel, _kind = parse_gateway_line(ln, hmap, proxy_nets)
             if rec is not None:
                 by_src.setdefault(panel or label or default_src or "网关", []).append(rec)
         else:

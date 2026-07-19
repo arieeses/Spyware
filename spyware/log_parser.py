@@ -221,9 +221,25 @@ def _parse_gw_ts(s: str) -> Optional[datetime]:
         return None
 
 
-def parse_gateway_line(line: str, hash_map: dict):
+def _real_client_from_gateway(d: dict, proxy_nets) -> str:
+    """网关已在 client_ip 里给出它解析的客户端 IP。但若上层反代/中转没进网关的
+    relay_ips, 网关会把反代自己(如 47.109.69.119)当成客户端。此时用日志里现成的
+    x_forwarded_for 链自己再剥一层: 从右往左跳过已知反代名单(抗伪造), 取真实客户端。"""
+    ip = (d.get("client_ip") or "").strip()
+    if not proxy_nets or not ip or not _ip_in_nets(ip, proxy_nets):
+        return ip                            # client_ip 不是反代 → 直接信网关
+    chain = [p.strip() for p in (d.get("x_forwarded_for") or "").split(",")
+             if p.strip() and p.strip() != "-"]
+    for c in reversed(chain):                # 从右(靠近服务端)往左, 第一个非反代=真实客户端
+        if not _ip_in_nets(c, proxy_nets):
+            return c
+    return ip                                # XFF 里全是反代/为空 → 只能保留原值
+
+
+def parse_gateway_line(line: str, hash_map: dict, proxy_nets=None):
     """解析订阅网关的 JSON 访问日志一行 → (PullRecord|None, 面板名, kind)。
     网关只记 token 的 SHA256, 靠 hash_map({sha256: token}) 还原成账号。
+    proxy_nets: 反代/中转 IP 名单; 用于修正网关把上层反代当成客户端的情况。
     kind: 'ok'(成功) / 'no_token'(非订阅) / 'unmatched'(有token但匹配不到账号) / 'bad'。"""
     import json as _json
     s = (line or "").strip()
@@ -242,7 +258,7 @@ def parse_gateway_line(line: str, hash_map: dict):
     if not token:
         return None, "", "unmatched"         # 匹配不到账号(未知/未同步的 token)
     ts = _parse_gw_ts(d.get("time"))
-    ip = (d.get("client_ip") or "").strip()
+    ip = _real_client_from_gateway(d, proxy_nets)
     if ts is None or not ip:
         return None, "", "bad"
     try:
