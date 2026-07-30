@@ -2240,7 +2240,7 @@ def _rule_preview(hist: dict, conds) -> int:
     return total
 
 
-def render_dynamic(store, msg="", err="", sel="*") -> str:
+def render_dynamic(store, msg="", err="", sel="*", edit="") -> str:
     """动态下发页: 按面板配三种入口 —— 普通入口(无法判定的用户)/内鬼入口(诱饵)/封端入口(特定UA)。
     面板选择做成分段按钮; 优先级: 自有>内鬼入口>封端UA>普通入口>真订阅。随 feed 下发给网关。"""
     panels = sorted({s["name"] for s in store.list_sources() if s["type"] == "v2board"}) if store else []
@@ -2261,24 +2261,41 @@ def render_dynamic(store, msg="", err="", sel="*") -> str:
         bid = b.get("id") or str(i)
         on = bool(b.get("on"))
         checked = "checked" if on else ""
-        rows.append(f"""
-        <tr>
-          <td style="width:44px">
-            <form method="post" action="/dynamic/block-toggle" style="display:inline">
-              <input type="hidden" name="panel" value="{esc(sel)}"><input type="hidden" name="id" value="{esc(bid)}">
-              <input type="hidden" name="on" value="{'1' if on else '0'}">
-              <label class="switch"><input type="checkbox" {checked} onchange="this.form.submit()"><span class="track"></span></label>
-            </form>
-          </td>
-          <td>UA 含 <code>{esc(b.get('ua',''))}</code></td>
-          <td>→ 入口域名 <b>{esc(b.get('domain',''))}</b></td>
-          <td style="text-align:right;white-space:nowrap">
-            <form method="post" action="/dynamic/block-del" style="display:inline" onsubmit="return confirm('删除此规则?')">
-              <input type="hidden" name="panel" value="{esc(sel)}"><input type="hidden" name="id" value="{esc(bid)}">
-              <button class="btn sm ghost">删除</button>
-            </form>
-          </td>
-        </tr>""")
+        if edit == bid:
+            # 编辑态: 内联表单改 UA / 域名
+            rows.append(f"""
+            <tr>
+              <td></td>
+              <td colspan="3">
+                <form method="post" action="/dynamic/block-edit" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                  <input type="hidden" name="panel" value="{esc(sel)}"><input type="hidden" name="id" value="{esc(bid)}">
+                  UA 含 <input name="ua" value="{esc(b.get('ua',''))}" style="min-width:160px">
+                  → <input name="domain" value="{esc(b.get('domain',''))}" style="min-width:220px">
+                  <button class="btn sm">保存</button>
+                  <a class="btn sm ghost" href="/dynamic?panel={quote(sel)}">取消</a>
+                </form>
+              </td>
+            </tr>""")
+        else:
+            rows.append(f"""
+            <tr>
+              <td style="width:44px">
+                <form method="post" action="/dynamic/block-toggle" style="display:inline">
+                  <input type="hidden" name="panel" value="{esc(sel)}"><input type="hidden" name="id" value="{esc(bid)}">
+                  <input type="hidden" name="on" value="{'1' if on else '0'}">
+                  <label class="switch"><input type="checkbox" {checked} onchange="this.form.submit()"><span class="track"></span></label>
+                </form>
+              </td>
+              <td>UA 含 <code>{esc(b.get('ua',''))}</code></td>
+              <td>→ 入口域名 <b>{esc(b.get('domain',''))}</b></td>
+              <td style="text-align:right;white-space:nowrap">
+                <a class="btn sm ghost" href="/dynamic?panel={quote(sel)}&edit={quote(bid)}">修改</a>
+                <form method="post" action="/dynamic/block-del" style="display:inline" onsubmit="return confirm('删除此规则?')">
+                  <input type="hidden" name="panel" value="{esc(sel)}"><input type="hidden" name="id" value="{esc(bid)}">
+                  <button class="btn sm ghost">删除</button>
+                </form>
+              </td>
+            </tr>""")
     blocks_html = (f'<table class="grid"><tbody>{"".join(rows)}</tbody></table>'
                    if rows else '<div class="dim small">还没有封端规则。用下面的表单新建一条。</div>')
     sel_cn = label(sel)
@@ -3384,7 +3401,7 @@ class Handler(BaseHTTPRequestHandler):
                                          q.get("tab", ["feed"])[0])
             elif active == "dynamic":
                 content = render_dynamic(store, q.get("msg", [""])[0], q.get("err", [""])[0],
-                                         q.get("panel", ["*"])[0])
+                                         q.get("panel", ["*"])[0], q.get("edit", [""])[0])
             elif active == "settings":
                 content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0], store=store)
             elif active == "logstore":
@@ -4039,7 +4056,7 @@ class Handler(BaseHTTPRequestHandler):
                          if (r.get("id") or "+".join(r.get("conds") or [])) != rid]
                 store.set_auto_insider_rules(rules)
                 self._to("/gateway?tab=rules&msg=" + quote("规则已删除")); return
-            if path in ("/dynamic/entry-save", "/dynamic/block-add",
+            if path in ("/dynamic/entry-save", "/dynamic/block-add", "/dynamic/block-edit",
                         "/dynamic/block-toggle", "/dynamic/block-del"):
                 panel = (formq.get("panel", ["*"])[0] or "*").strip() or "*"
                 entry = store.panel_dispatch(panel)
@@ -4062,6 +4079,20 @@ class Handler(BaseHTTPRequestHandler):
                     entry["blocks"].append({"id": bid, "ua": ua, "domain": domain, "on": False})
                     store.save_panel_dispatch(panel, entry)
                     self._to(back + "&msg=" + quote("封端规则已新建(默认关闭)")); return
+                if path == "/dynamic/block-edit":
+                    old = formq.get("id", [""])[0]
+                    ua = (formq.get("ua", [""])[0] or "").strip()
+                    domain = (formq.get("domain", [""])[0] or "").strip()
+                    if not ua or not domain:
+                        self._to(back + "&edit=" + quote(old) + "&err=" + quote("UA 和 域名 都要填")); return
+                    newid = "%s|%s" % (ua, domain)
+                    if any((b.get("id") or "") == newid for b in entry["blocks"] if (b.get("id") or "") != old):
+                        self._to(back + "&edit=" + quote(old) + "&err=" + quote("已存在相同规则")); return
+                    for b in entry["blocks"]:
+                        if (b.get("id") or "") == old:
+                            b["ua"] = ua; b["domain"] = domain; b["id"] = newid
+                    store.save_panel_dispatch(panel, entry)
+                    self._to(back + "&msg=" + quote("规则已修改")); return
                 if path == "/dynamic/block-toggle":
                     bid = formq.get("id", [""])[0]
                     on = formq.get("on", [""])[0] in ("0", "false", "")  # 传的是当前值, 取反
