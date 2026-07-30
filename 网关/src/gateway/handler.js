@@ -183,9 +183,15 @@ export function createHandler(stateHolder, { analytics = null } = {}) {
     const clientType = detectClientType(flag, userAgent);
     const proto = (req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http'));
 
+    // 动态下发配置(按面板): {normal, insider, blocks:[{ua,domain}]}。旧版网关无 getDispatch 时为 null。
+    const disp = (state.insiderFeed && typeof state.insiderFeed.getDispatch === 'function')
+      ? state.insiderFeed.getDispatch(origin.name) : null;
+
     // 6a. 鍋囪闃咃紙鑺傜偣鏄亣鐨勶紝浣嗗彲閫夋媺鍙栫湡瀹?subscription-userinfo 璁╁埌鏈?娴侀噺涓虹湡锛?
     if (dec.decision === 'fake') {
-      if (origin.decoy_host) {
+      // 内鬼入口: 面板配了就用面板的, 没配回退网关 config 的 decoy_host(选项 A)
+      const insiderHost = (disp && disp.insider) || origin.decoy_host;
+      if (insiderHost) {
         const originResp = await forwardToOrigin({
           baseUrl: origin.base_url,
           path: urlObj.pathname,
@@ -197,14 +203,14 @@ export function createHandler(stateHolder, { analytics = null } = {}) {
           maxBytes: cfg.server.max_origin_response_bytes,
           preserveResponseHeaders: 'all',
         });
-        const body = rewriteSubscriptionBody(originResp.body, clientType, origin.decoy_host);
+        const body = rewriteSubscriptionBody(originResp.body, clientType, insiderHost);
         sendResponse(res, originResp.status, originResp.headers, body);
         logger.access({
           ...logBase, ...logIp,
           decision: 'fake_rewrite', risk_reason: dec.risk_reason, allowlist_match: dec.allowlist_match,
           asn: dec.asn, asn_org: dec.asn_org, matched_cidr: dec.matched_cidr, geoip_error: dec.geoip_error,
           client_type: clientType, origin: origin.base_url, origin_status: originResp.status,
-          decoy_host: origin.decoy_host, status: originResp.status, latency_ms: Date.now() - start,
+          decoy_host: insiderHost, status: originResp.status, latency_ms: Date.now() - start,
         });
         recordAnalytics({ origin, ipInfo, decision: 'fake_rewrite', risk_reason: dec.risk_reason, clientType });
         return;
@@ -233,21 +239,26 @@ export function createHandler(stateHolder, { analytics = null } = {}) {
         timeoutMs: cfg.server.origin_timeout_seconds * 1000,
         maxBytes: cfg.server.max_origin_response_bytes,
       });
-      // 动态下发: 非内鬼用户(走到这里说明未命中风险), 若 UA 命中规则, 把节点入口域名改写成指定域名。
-      // 内鬼诱饵优先(上面 fake 分支已处理), 这里只对正常用户生效; 旧版网关无 insiderFeed 时自动跳过。
-      const uaDomain = state.insiderFeed && typeof state.insiderFeed.matchUaDomain === 'function'
-        ? state.insiderFeed.matchUaDomain(origin.name, userAgent) : null;
-      const outBody = uaDomain ? rewriteSubscriptionBody(originResp.body, clientType, uaDomain) : originResp.body;
+      // 动态下发(非内鬼用户): ③特定UA→封端入口, 否则④普通入口。都没配则下发真订阅。
+      let target = null, hitKind = '';
+      if (disp) {
+        const ua = String(userAgent || '').toLowerCase();
+        for (const b of (disp.blocks || [])) {
+          if (b && b.ua && b.domain && ua.includes(String(b.ua).toLowerCase())) { target = b.domain; hitKind = 'block'; break; }
+        }
+        if (!target && disp.normal) { target = disp.normal; hitKind = 'normal'; }
+      }
+      const outBody = target ? rewriteSubscriptionBody(originResp.body, clientType, target) : originResp.body;
       sendResponse(res, originResp.status, originResp.headers, outBody);
       logger.access({
         ...logBase, ...logIp,
-        decision: uaDomain ? 'ua_rewrite' : 'proxy', risk_reason: dec.risk_reason, allowlist_match: dec.allowlist_match,
+        decision: target ? 'dispatch_rewrite' : 'proxy', risk_reason: dec.risk_reason, allowlist_match: dec.allowlist_match,
         asn: dec.asn, asn_org: dec.asn_org, matched_cidr: '',
         origin: origin.base_url, origin_status: originResp.status,
-        ...(uaDomain ? { client_type: clientType, ua_domain: uaDomain } : {}),
+        ...(target ? { client_type: clientType, dispatch_kind: hitKind, dispatch_host: target } : {}),
         status: originResp.status, latency_ms: Date.now() - start,
       });
-      recordAnalytics({ origin, ipInfo, decision: uaDomain ? 'ua_rewrite' : 'proxy', risk_reason: dec.risk_reason, clientType });
+      recordAnalytics({ origin, ipInfo, decision: target ? 'dispatch_rewrite' : 'proxy', risk_reason: dec.risk_reason, clientType });
     } catch (err) {
       const kind = err instanceof OriginError ? err.kind : 'unknown';
       // 鍥炴簮澶辫触鎸?origin_failure_mode 澶勭悊

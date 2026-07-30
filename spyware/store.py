@@ -1055,32 +1055,53 @@ class Store:
                           "conds": conds, "on": bool(r.get("on"))})
         self.set_kv("auto_insider_rules", _json.dumps(clean, ensure_ascii=False))
 
-    def get_ua_domain_rules(self):
-        """动态下发规则: [{id, panel, ua, domain, on}]。按 UA 包含匹配, 命中把节点入口
-        域名改写成 domain; panel='*' 表示所有面板。仅供网关拉 feed 后对非内鬼用户生效。"""
+    def get_dynamic_dispatch(self):
+        """动态下发配置(按面板): {panel: {normal, insider, blocks:[{id,ua,domain,on}]}}。
+        panel='*' 为全部面板。normal=普通入口域名(无法判定的用户), insider=内鬼入口域名(诱饵,
+        空则回退网关 config 的 decoy_host), blocks=封端入口(特定 UA→域名, 包含即匹配)。"""
         import json as _json
-        raw = self.get_kv("ua_domain_rules", "")
+        raw = self.get_kv("dynamic_dispatch", "")
         if raw:
             try:
-                rules = _json.loads(raw)
-                if isinstance(rules, list):
-                    return rules
+                d = _json.loads(raw)
+                if isinstance(d, dict):
+                    return d
             except (ValueError, TypeError):
                 pass
-        return []
+        return {}
 
-    def set_ua_domain_rules(self, rules) -> None:
+    def set_dynamic_dispatch(self, cfg) -> None:
         import json as _json
-        clean = []
-        for r in rules or []:
-            ua = (r.get("ua") or "").strip()
-            domain = (r.get("domain") or "").strip()
-            panel = (r.get("panel") or "*").strip() or "*"
-            if not ua or not domain:
+        clean = {}
+        for panel, c in (cfg or {}).items():
+            if not isinstance(c, dict):
                 continue
-            clean.append({"id": r.get("id") or "", "panel": panel, "ua": ua,
-                          "domain": domain, "on": bool(r.get("on"))})
-        self.set_kv("ua_domain_rules", _json.dumps(clean, ensure_ascii=False))
+            blocks = []
+            for b in (c.get("blocks") or []):
+                ua = (b.get("ua") or "").strip()
+                dom = (b.get("domain") or "").strip()
+                if not ua or not dom:
+                    continue
+                blocks.append({"id": b.get("id") or "", "ua": ua, "domain": dom,
+                               "on": bool(b.get("on"))})
+            entry = {"normal": (c.get("normal") or "").strip(),
+                     "insider": (c.get("insider") or "").strip(), "blocks": blocks}
+            if entry["normal"] or entry["insider"] or blocks:
+                clean[str(panel)] = entry
+        self.set_kv("dynamic_dispatch", _json.dumps(clean, ensure_ascii=False))
+
+    def panel_dispatch(self, panel):
+        """取某面板的动态下发配置(不存在返回空模板)。"""
+        d = self.get_dynamic_dispatch().get(str(panel))
+        if not isinstance(d, dict):
+            return {"normal": "", "insider": "", "blocks": []}
+        d.setdefault("normal", ""); d.setdefault("insider", ""); d.setdefault("blocks", [])
+        return d
+
+    def save_panel_dispatch(self, panel, entry) -> None:
+        d = self.get_dynamic_dispatch()
+        d[str(panel)] = entry
+        self.set_dynamic_dispatch(d)
 
     # —— 管理员 / 会话 / 重置 ——
     def admin_count(self) -> int:

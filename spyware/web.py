@@ -2240,60 +2240,83 @@ def _rule_preview(hist: dict, conds) -> int:
     return total
 
 
-def render_dynamic(store, msg="", err="") -> str:
-    """动态下发页: 按 UA 把节点入口域名改写成指定域名(按面板设置, 包含即匹配)。
-    规则随 /api/gateway_feed 下发给网关; 内鬼诱饵优先, UA 规则只对非内鬼用户生效。"""
-    rules = store.get_ua_domain_rules() if store else []
+def render_dynamic(store, msg="", err="", sel="*") -> str:
+    """动态下发页: 按面板配三种入口 —— 普通入口(无法判定的用户)/内鬼入口(诱饵)/封端入口(特定UA)。
+    面板选择做成分段按钮; 优先级: 自有>内鬼入口>封端UA>普通入口>真订阅。随 feed 下发给网关。"""
     panels = sorted({s["name"] for s in store.list_sources() if s["type"] == "v2board"}) if store else []
-    panel_opts = '<option value="*">全部面板</option>' + "".join(
-        f'<option value="{esc(p)}">{esc(p)}</option>' for p in panels)
+    keys = ["*"] + panels
+    if sel not in keys:
+        sel = "*"
+    # 分段按钮
+    def label(k):
+        return "全部面板" if k == "*" else k
+    segs = "".join(
+        f'<a class="seg {"active" if k == sel else ""}" style="text-decoration:none" '
+        f'href="/dynamic?panel={quote(k)}">{esc(label(k))}</a>'
+        for k in keys)
+    dd = store.panel_dispatch(sel) if store else {"normal": "", "insider": "", "blocks": []}
+    # 封端规则行
     rows = []
-    for i, r in enumerate(rules):
-        rid = r.get("id") or str(i)
-        on = bool(r.get("on"))
-        panel = r.get("panel") or "*"
-        panel_cn = "全部面板" if panel == "*" else panel
+    for i, b in enumerate(dd.get("blocks") or []):
+        bid = b.get("id") or str(i)
+        on = bool(b.get("on"))
         checked = "checked" if on else ""
         rows.append(f"""
         <tr>
           <td style="width:44px">
-            <form method="post" action="/dynamic/toggle" style="display:inline">
-              <input type="hidden" name="id" value="{esc(rid)}">
+            <form method="post" action="/dynamic/block-toggle" style="display:inline">
+              <input type="hidden" name="panel" value="{esc(sel)}"><input type="hidden" name="id" value="{esc(bid)}">
               <input type="hidden" name="on" value="{'1' if on else '0'}">
               <label class="switch"><input type="checkbox" {checked} onchange="this.form.submit()"><span class="track"></span></label>
             </form>
           </td>
-          <td><span class="chip">{esc(panel_cn)}</span></td>
-          <td>UA 含 <code>{esc(r.get('ua',''))}</code></td>
-          <td>→ 入口域名 <b>{esc(r.get('domain',''))}</b></td>
+          <td>UA 含 <code>{esc(b.get('ua',''))}</code></td>
+          <td>→ 入口域名 <b>{esc(b.get('domain',''))}</b></td>
           <td style="text-align:right;white-space:nowrap">
-            <form method="post" action="/dynamic/del" style="display:inline" onsubmit="return confirm('删除此规则?')">
-              <input type="hidden" name="id" value="{esc(rid)}">
+            <form method="post" action="/dynamic/block-del" style="display:inline" onsubmit="return confirm('删除此规则?')">
+              <input type="hidden" name="panel" value="{esc(sel)}"><input type="hidden" name="id" value="{esc(bid)}">
               <button class="btn sm ghost">删除</button>
             </form>
           </td>
         </tr>""")
-    rules_html = (f'<table class="grid"><tbody>{"".join(rows)}</tbody></table>'
-                  if rows else '<div class="dim small">还没有规则。用下面的表单新建一条。</div>')
+    blocks_html = (f'<table class="grid"><tbody>{"".join(rows)}</tbody></table>'
+                   if rows else '<div class="dim small">还没有封端规则。用下面的表单新建一条。</div>')
+    sel_cn = label(sel)
     return f"""{_card_alert(msg, err)}
     <div class="card">
-      <div class="card-title">动态下发 · 按 UA 改写入口域名</div>
+      <div class="card-title">动态下发</div>
       <div class="dim small" style="margin-bottom:10px">
-        订阅网关下发订阅时, 若客户端 <b>UA 包含</b>你设定的字符串, 就把每个节点的<b>入口域名</b>改写成指定域名
-        (按面板生效, 大小写不敏感, 顺序靠前的规则先命中)。规则随网关 feed 下发。
-        <b>内鬼诱饵优先</b>: 命中内鬼仍下发诱饵, UA 规则只对正常用户生效, 防止内鬼伪造 UA 骗真入口。
+        网关下发订阅时, 按下面的优先级把每个节点的<b>入口域名</b>改写:
+        <b>①自有白名单→真实 ②内鬼→内鬼入口 ③特定UA→封端入口 ④其余(无法判定)→普通入口</b>。
+        面板由订阅域名(Host)自动识别; UA 包含即匹配、大小写不敏感。
       </div>
-      {rules_html}
+      <div class="segbar">{segs}</div>
+      <div class="dim small" style="margin-top:6px">当前配置面板: <b>{esc(sel_cn)}</b>{'(对所有面板生效, 面板单独配置会覆盖它)' if sel == '*' else ''}</div>
     </div>
+
     <div class="card">
-      <div class="card-title">＋ 新建规则</div>
-      <form method="post" action="/dynamic/add" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-        <div><div class="dim small">面板</div><select name="panel">{panel_opts}</select></div>
-        <div><div class="dim small">UA 包含</div><input name="ua" placeholder="如 meta/nextin" style="min-width:200px"></div>
-        <div><div class="dim small">下发入口域名</div><input name="domain" placeholder="如 a.example.com" style="min-width:200px"></div>
+      <div class="card-title">普通入口 &amp; 内鬼入口 · {esc(sel_cn)}</div>
+      <form method="post" action="/dynamic/entry-save" style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
+        <input type="hidden" name="panel" value="{esc(sel)}">
+        <div><div class="dim small">普通入口域名(无法判定是否内鬼的用户; 留空=下发真订阅不改写)</div>
+          <input name="normal" value="{esc(dd.get('normal',''))}" placeholder="如 normal.example.com" style="min-width:260px"></div>
+        <div><div class="dim small">内鬼入口域名(诱饵; 留空=回退网关 config 的 decoy_host)</div>
+          <input name="insider" value="{esc(dd.get('insider',''))}" placeholder="如 trap.example.com" style="min-width:260px"></div>
+        <button class="btn">保存</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-title">封端入口(特定 UA) · {esc(sel_cn)}</div>
+      <div class="dim small" style="margin-bottom:8px">命中的特定 UA 用户, 入口域名改写成指定域名(优先级高于普通入口、低于内鬼入口)。</div>
+      {blocks_html}
+      <form method="post" action="/dynamic/block-add" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">
+        <input type="hidden" name="panel" value="{esc(sel)}">
+        <div><div class="dim small">UA 包含</div><input name="ua" placeholder="如 meta/nextin" style="min-width:220px"></div>
+        <div><div class="dim small">下发入口域名</div><input name="domain" placeholder="如 a.example.com" style="min-width:220px"></div>
         <button class="btn">新建(默认关闭)</button>
       </form>
-      <div class="dim small" style="margin-top:8px">例: UA 含 <code>meta/nextin</code> → A 域名; UA 含 <code>clash.meta</code> → B 域名。新建后打开开关生效。</div>
+      <div class="dim small" style="margin-top:8px">例: UA 含 <code>meta/nextin</code> → A 域名; UA 含 <code>clash.meta</code> → B 域名。</div>
     </div>"""
 
 
@@ -3083,16 +3106,22 @@ class Handler(BaseHTTPRequestHandler):
                 relay_ips = _feed_file_lines(CONFIG.proxy_ips_file)   # 反代/中转 IP(上层反代), 网关 XFF 解析时跳过
                 allow_ips = _feed_file_lines(CONFIG.self_ips_file) + relay_ips
                 allow_uas = _feed_file_lines(CONFIG.ua_self_file)
-                # 动态下发规则(按UA改写入口域名): 只发已启用的, 与拦截开关无关(路由用, 非拦截)
-                ua_domain_rules = [{"panel": r.get("panel") or "*", "ua": r.get("ua") or "",
-                                    "domain": r.get("domain") or ""}
-                                   for r in store.get_ua_domain_rules() if r.get("on")]
+                # 动态下发配置(按面板: 普通/内鬼入口 + 封端UA): 只发有内容的, 与拦截开关无关(路由用)
+                dispatch = {}
+                for _pn, _c in store.get_dynamic_dispatch().items():
+                    _blocks = [{"ua": b.get("ua", ""), "domain": b.get("domain", "")}
+                               for b in (_c.get("blocks") or []) if b.get("on")]
+                    _e = {}
+                    if _c.get("normal"): _e["normal"] = _c["normal"]
+                    if _c.get("insider"): _e["insider"] = _c["insider"]
+                    if _blocks: _e["blocks"] = _blocks
+                    if _e: dispatch[_pn] = _e
                 if store.get_kv("gateway_feed_enabled", "1") != "1":
                     # 开关关闭: 下发空拦截名单(网关随之清空 spyware 侧拦截, 等于暂停); 白名单/反代/动态下发仍发
                     self._send(json.dumps({"enabled": False, "interval": poll,
                                            "ips": [], "asns": [], "uas": [], "org_keywords": [], "tokens": [],
                                            "allow_ips": allow_ips, "allow_uas": allow_uas, "relay_ips": relay_ips,
-                                           "ua_domain_rules": ua_domain_rules,
+                                           "dispatch": dispatch,
                                            "counts": {"ips": 0, "asns": 0, "uas": 0, "orgs": 0, "tokens": 0}}).encode(),
                                "application/json; charset=utf-8")
                     return
@@ -3108,7 +3137,7 @@ class Handler(BaseHTTPRequestHandler):
                 out = {"enabled": True, "interval": poll, "ips": ips, "asns": asns, "uas": uas,
                        "org_keywords": orgs, "tokens": tokens,
                        "allow_ips": allow_ips, "allow_uas": allow_uas, "relay_ips": relay_ips,
-                       "ua_domain_rules": ua_domain_rules,
+                       "dispatch": dispatch,
                        "counts": {"ips": len(ips), "asns": len(asns), "uas": len(uas),
                                   "orgs": len(orgs), "tokens": len(tokens)}}
                 self._send(json.dumps(out, ensure_ascii=False).encode(), "application/json; charset=utf-8")
@@ -3315,7 +3344,8 @@ class Handler(BaseHTTPRequestHandler):
                 content = render_gateway(store, q.get("msg", [""])[0], q.get("err", [""])[0],
                                          q.get("tab", ["feed"])[0])
             elif active == "dynamic":
-                content = render_dynamic(store, q.get("msg", [""])[0], q.get("err", [""])[0])
+                content = render_dynamic(store, q.get("msg", [""])[0], q.get("err", [""])[0],
+                                         q.get("panel", ["*"])[0])
             elif active == "settings":
                 content = render_settings(admin, q.get("msg", [""])[0], q.get("err", [""])[0], store=store)
             elif active == "logstore":
@@ -3970,33 +4000,40 @@ class Handler(BaseHTTPRequestHandler):
                          if (r.get("id") or "+".join(r.get("conds") or [])) != rid]
                 store.set_auto_insider_rules(rules)
                 self._to("/gateway?tab=rules&msg=" + quote("规则已删除")); return
-            if path == "/dynamic/add":
-                ua = (formq.get("ua", [""])[0] or "").strip()
-                domain = (formq.get("domain", [""])[0] or "").strip()
-                panel = (formq.get("panel", ["*"])[0] or "*").strip()
-                if not ua or not domain:
-                    self._to("/dynamic?err=" + quote("UA 和 域名 都要填")); return
-                rules = store.get_ua_domain_rules()
-                rid = "%s|%s|%s" % (panel, ua, domain)
-                if any((r.get("id") or "") == rid for r in rules):
-                    self._to("/dynamic?err=" + quote("已存在相同规则")); return
-                rules.append({"id": rid, "panel": panel, "ua": ua, "domain": domain, "on": False})
-                store.set_ua_domain_rules(rules)
-                self._to("/dynamic?msg=" + quote("规则已新建(默认关闭), 打开开关后下发生效")); return
-            if path == "/dynamic/toggle":
-                rid = formq.get("id", [""])[0]
-                on = formq.get("on", [""])[0] in ("0", "false", "")  # 表单传的是"当前值", 取反
-                rules = store.get_ua_domain_rules()
-                for r in rules:
-                    if (r.get("id") or "") == rid:
-                        r["on"] = on
-                store.set_ua_domain_rules(rules)
-                self._to("/dynamic?msg=" + quote("已启用规则" if on else "已停用规则")); return
-            if path == "/dynamic/del":
-                rid = formq.get("id", [""])[0]
-                rules = [r for r in store.get_ua_domain_rules() if (r.get("id") or "") != rid]
-                store.set_ua_domain_rules(rules)
-                self._to("/dynamic?msg=" + quote("规则已删除")); return
+            if path in ("/dynamic/entry-save", "/dynamic/block-add",
+                        "/dynamic/block-toggle", "/dynamic/block-del"):
+                panel = (formq.get("panel", ["*"])[0] or "*").strip() or "*"
+                entry = store.panel_dispatch(panel)
+                back = "/dynamic?panel=" + quote(panel)
+                if path == "/dynamic/entry-save":
+                    entry["normal"] = (formq.get("normal", [""])[0] or "").strip()
+                    entry["insider"] = (formq.get("insider", [""])[0] or "").strip()
+                    store.save_panel_dispatch(panel, entry)
+                    self._to(back + "&msg=" + quote("入口已保存")); return
+                if path == "/dynamic/block-add":
+                    ua = (formq.get("ua", [""])[0] or "").strip()
+                    domain = (formq.get("domain", [""])[0] or "").strip()
+                    if not ua or not domain:
+                        self._to(back + "&err=" + quote("UA 和 域名 都要填")); return
+                    bid = "%s|%s" % (ua, domain)
+                    if any((b.get("id") or "") == bid for b in entry["blocks"]):
+                        self._to(back + "&err=" + quote("已存在相同规则")); return
+                    entry["blocks"].append({"id": bid, "ua": ua, "domain": domain, "on": False})
+                    store.save_panel_dispatch(panel, entry)
+                    self._to(back + "&msg=" + quote("封端规则已新建(默认关闭)")); return
+                if path == "/dynamic/block-toggle":
+                    bid = formq.get("id", [""])[0]
+                    on = formq.get("on", [""])[0] in ("0", "false", "")  # 传的是当前值, 取反
+                    for b in entry["blocks"]:
+                        if (b.get("id") or "") == bid:
+                            b["on"] = on
+                    store.save_panel_dispatch(panel, entry)
+                    self._to(back + "&msg=" + quote("已启用规则" if on else "已停用规则")); return
+                if path == "/dynamic/block-del":
+                    bid = formq.get("id", [""])[0]
+                    entry["blocks"] = [b for b in entry["blocks"] if (b.get("id") or "") != bid]
+                    store.save_panel_dispatch(panel, entry)
+                    self._to(back + "&msg=" + quote("规则已删除")); return
             if path == "/settings/sync-scope":
                 on = form.get("paid_only") in ("on", "1", "true")
                 store.set_kv("sync_paid_only", "1" if on else "0")
