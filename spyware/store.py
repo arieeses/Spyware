@@ -1055,6 +1055,33 @@ class Store:
                           "conds": conds, "on": bool(r.get("on"))})
         self.set_kv("auto_insider_rules", _json.dumps(clean, ensure_ascii=False))
 
+    def get_ua_domain_rules(self):
+        """动态下发规则: [{id, panel, ua, domain, on}]。按 UA 包含匹配, 命中把节点入口
+        域名改写成 domain; panel='*' 表示所有面板。仅供网关拉 feed 后对非内鬼用户生效。"""
+        import json as _json
+        raw = self.get_kv("ua_domain_rules", "")
+        if raw:
+            try:
+                rules = _json.loads(raw)
+                if isinstance(rules, list):
+                    return rules
+            except (ValueError, TypeError):
+                pass
+        return []
+
+    def set_ua_domain_rules(self, rules) -> None:
+        import json as _json
+        clean = []
+        for r in rules or []:
+            ua = (r.get("ua") or "").strip()
+            domain = (r.get("domain") or "").strip()
+            panel = (r.get("panel") or "*").strip() or "*"
+            if not ua or not domain:
+                continue
+            clean.append({"id": r.get("id") or "", "panel": panel, "ua": ua,
+                          "domain": domain, "on": bool(r.get("on"))})
+        self.set_kv("ua_domain_rules", _json.dumps(clean, ensure_ascii=False))
+
     # —— 管理员 / 会话 / 重置 ——
     def admin_count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) c FROM admins").fetchone()["c"]

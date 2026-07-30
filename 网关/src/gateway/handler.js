@@ -233,15 +233,21 @@ export function createHandler(stateHolder, { analytics = null } = {}) {
         timeoutMs: cfg.server.origin_timeout_seconds * 1000,
         maxBytes: cfg.server.max_origin_response_bytes,
       });
-      sendResponse(res, originResp.status, originResp.headers, originResp.body);
+      // 动态下发: 非内鬼用户(走到这里说明未命中风险), 若 UA 命中规则, 把节点入口域名改写成指定域名。
+      // 内鬼诱饵优先(上面 fake 分支已处理), 这里只对正常用户生效; 旧版网关无 insiderFeed 时自动跳过。
+      const uaDomain = state.insiderFeed && typeof state.insiderFeed.matchUaDomain === 'function'
+        ? state.insiderFeed.matchUaDomain(origin.name, userAgent) : null;
+      const outBody = uaDomain ? rewriteSubscriptionBody(originResp.body, clientType, uaDomain) : originResp.body;
+      sendResponse(res, originResp.status, originResp.headers, outBody);
       logger.access({
         ...logBase, ...logIp,
-        decision: 'proxy', risk_reason: dec.risk_reason, allowlist_match: dec.allowlist_match,
+        decision: uaDomain ? 'ua_rewrite' : 'proxy', risk_reason: dec.risk_reason, allowlist_match: dec.allowlist_match,
         asn: dec.asn, asn_org: dec.asn_org, matched_cidr: '',
         origin: origin.base_url, origin_status: originResp.status,
+        ...(uaDomain ? { client_type: clientType, ua_domain: uaDomain } : {}),
         status: originResp.status, latency_ms: Date.now() - start,
       });
-      recordAnalytics({ origin, ipInfo, decision: 'proxy', risk_reason: dec.risk_reason, clientType });
+      recordAnalytics({ origin, ipInfo, decision: uaDomain ? 'ua_rewrite' : 'proxy', risk_reason: dec.risk_reason, clientType });
     } catch (err) {
       const kind = err instanceof OriginError ? err.kind : 'unknown';
       // 鍥炴簮澶辫触鎸?origin_failure_mode 澶勭悊
