@@ -7,7 +7,7 @@ import { decide } from './decision.js';
 import { detectClientType, buildFakeSubscription } from './fake.js';
 import { forwardToOrigin, OriginError } from './proxy.js';
 import { parseUserInfo } from './userinfo.js';
-import { rewriteSubscriptionBody } from './rewrite.js';
+import { rewriteSubscriptionBody, makeResolver } from './rewrite.js';
 import { isRiskSuspicious, riskLevelFor } from '../analytics/risk.js';
 import { shouldAnalyzePath } from '../analytics/pathFilter.js';
 
@@ -189,9 +189,12 @@ export function createHandler(stateHolder, { analytics = null } = {}) {
 
     // 6a. 鍋囪闃咃紙鑺傜偣鏄亣鐨勶紝浣嗗彲閫夋媺鍙栫湡瀹?subscription-userinfo 璁╁埌鏈?娴侀噺涓虹湡锛?
     if (dec.decision === 'fake') {
-      // 内鬼入口: 面板配了就用面板的, 没配回退网关 config 的 decoy_host(选项 A)
-      const insiderHost = (disp && disp.insider) || origin.decoy_host;
-      if (insiderHost) {
+      // 内鬼入口: 面板配了就用面板的(可按协议), 没配回退网关 config 的 decoy_host(选项 A)
+      const insiderEntry = disp && disp.insider;   // {def, proto} | undefined
+      const insiderDef = (insiderEntry && insiderEntry.def) || origin.decoy_host;
+      if (insiderDef || (insiderEntry && insiderEntry.proto && Object.keys(insiderEntry.proto).length)) {
+        const insiderResolve = makeResolver(insiderEntry, origin.decoy_host);
+        const insiderHost = insiderDef;   // 日志用的代表域名
         const originResp = await forwardToOrigin({
           baseUrl: origin.base_url,
           path: urlObj.pathname,
@@ -203,7 +206,7 @@ export function createHandler(stateHolder, { analytics = null } = {}) {
           maxBytes: cfg.server.max_origin_response_bytes,
           preserveResponseHeaders: 'all',
         });
-        const body = rewriteSubscriptionBody(originResp.body, clientType, insiderHost);
+        const body = rewriteSubscriptionBody(originResp.body, clientType, insiderResolve);
         sendResponse(res, originResp.status, originResp.headers, body);
         logger.access({
           ...logBase, ...logIp,
@@ -239,26 +242,34 @@ export function createHandler(stateHolder, { analytics = null } = {}) {
         timeoutMs: cfg.server.origin_timeout_seconds * 1000,
         maxBytes: cfg.server.max_origin_response_bytes,
       });
-      // 动态下发(非内鬼用户): ③特定UA→封端入口, 否则④普通入口。都没配则下发真订阅。
-      let target = null, hitKind = '';
-      if (disp) {
-        const ua = String(userAgent || '').toLowerCase();
-        for (const b of (disp.blocks || [])) {
-          if (b && b.ua && b.domain && ua.includes(String(b.ua).toLowerCase())) { target = b.domain; hitKind = 'block'; break; }
-        }
-        if (!target && disp.normal) { target = disp.normal; hitKind = 'normal'; }
+      // 动态下发(非内鬼用户): 按每个节点的协议挑域名。优先③封端(UA命中)、否则④普通入口。
+      const entryHasAny = (e) => e && (e.def || (e.proto && Object.keys(e.proto).length));
+      const ua = String(userAgent || '').toLowerCase();
+      const matchedBlocks = (disp && Array.isArray(disp.blocks))
+        ? disp.blocks.filter((b) => b && b.ua && ua.includes(String(b.ua).toLowerCase())) : [];
+      const normalEntry = disp && disp.normal;
+      const hitKind = matchedBlocks.length ? 'block' : (entryHasAny(normalEntry) ? 'normal' : '');
+      const sampleHost = matchedBlocks.length
+        ? (matchedBlocks[0].domain && matchedBlocks[0].domain.def) || ''
+        : (normalEntry && normalEntry.def) || '';
+      let resolve = null;
+      if (hitKind) {
+        resolve = (p) => {
+          for (const b of matchedBlocks) { const h = makeResolver(b.domain)(p); if (h) return h; }
+          return normalEntry ? makeResolver(normalEntry)(p) : '';
+        };
       }
-      const outBody = target ? rewriteSubscriptionBody(originResp.body, clientType, target) : originResp.body;
+      const outBody = resolve ? rewriteSubscriptionBody(originResp.body, clientType, resolve) : originResp.body;
       sendResponse(res, originResp.status, originResp.headers, outBody);
       logger.access({
         ...logBase, ...logIp,
-        decision: target ? 'dispatch_rewrite' : 'proxy', risk_reason: dec.risk_reason, allowlist_match: dec.allowlist_match,
+        decision: resolve ? 'dispatch_rewrite' : 'proxy', risk_reason: dec.risk_reason, allowlist_match: dec.allowlist_match,
         asn: dec.asn, asn_org: dec.asn_org, matched_cidr: '',
         origin: origin.base_url, origin_status: originResp.status,
-        ...(target ? { client_type: clientType, dispatch_kind: hitKind, dispatch_host: target } : {}),
+        ...(resolve ? { client_type: clientType, dispatch_kind: hitKind, dispatch_host: sampleHost } : {}),
         status: originResp.status, latency_ms: Date.now() - start,
       });
-      recordAnalytics({ origin, ipInfo, decision: target ? 'dispatch_rewrite' : 'proxy', risk_reason: dec.risk_reason, clientType });
+      recordAnalytics({ origin, ipInfo, decision: resolve ? 'dispatch_rewrite' : 'proxy', risk_reason: dec.risk_reason, clientType });
     } catch (err) {
       const kind = err instanceof OriginError ? err.kind : 'unknown';
       // 鍥炴簮澶辫触鎸?origin_failure_mode 澶勭悊

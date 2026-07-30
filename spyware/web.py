@@ -2301,14 +2301,17 @@ def render_dynamic(store, msg="", err="", sel="*") -> str:
         <div><div class="dim small">普通入口域名(无法判定是否内鬼的用户; 留空=下发真订阅不改写)</div>
           <div style="display:flex;gap:8px;align-items:center">
             <label class="switch"><input type="checkbox" name="normal_on" {'checked' if dd.get('normal_on') else ''}><span class="track"></span></label>
-            <input name="normal" value="{esc(dd.get('normal',''))}" placeholder="如 normal.example.com" style="min-width:240px"></div></div>
+            <input name="normal" value="{esc(dd.get('normal',''))}" placeholder="如 cdn.example.com hysteria2,tuic=direct.example.com" style="min-width:340px"></div></div>
         <div><div class="dim small">内鬼入口域名(诱饵; 留空=回退网关 config 的 decoy_host)</div>
           <div style="display:flex;gap:8px;align-items:center">
             <label class="switch"><input type="checkbox" name="insider_on" {'checked' if dd.get('insider_on') else ''}><span class="track"></span></label>
-            <input name="insider" value="{esc(dd.get('insider',''))}" placeholder="如 trap.example.com" style="min-width:240px"></div></div>
+            <input name="insider" value="{esc(dd.get('insider',''))}" placeholder="如 trap.example.com" style="min-width:280px"></div></div>
         <button class="btn">保存</button>
       </form>
-      <div class="dim small" style="margin-top:8px">开关关闭时该入口不下发(相当于停用但保留域名)。改完点「保存」生效。</div>
+      <div class="dim small" style="margin-top:8px">
+        开关关闭=该入口不下发(保留域名)。<b>按协议下发</b>: 域名栏填「默认域名 协议=域名」, 多协议逗号分隔, 例:
+        <code>cdn.com hysteria2,tuic=direct.com</code>(默认走 cdn.com, hysteria2/tuic 走 direct.com)。
+        协议名: ss/vmess/vless/trojan/hysteria/hysteria2/tuic/anytls。改完点「保存」。</div>
     </div>
 
     <div class="card">
@@ -2318,10 +2321,10 @@ def render_dynamic(store, msg="", err="", sel="*") -> str:
       <form method="post" action="/dynamic/block-add" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:12px">
         <input type="hidden" name="panel" value="{esc(sel)}">
         <div><div class="dim small">UA 包含</div><input name="ua" placeholder="如 meta/nextin" style="min-width:220px"></div>
-        <div><div class="dim small">下发入口域名</div><input name="domain" placeholder="如 a.example.com" style="min-width:220px"></div>
+        <div><div class="dim small">下发入口域名(同样支持按协议)</div><input name="domain" placeholder="如 a.com 或 a.com tuic=b.com" style="min-width:260px"></div>
         <button class="btn">新建(默认关闭)</button>
       </form>
-      <div class="dim small" style="margin-top:8px">例: UA 含 <code>meta/nextin</code> → A 域名; UA 含 <code>clash.meta</code> → B 域名。</div>
+      <div class="dim small" style="margin-top:8px">例: UA 含 <code>meta/nextin</code> → A 域名; UA 含 <code>clash.meta</code> → B 域名。域名栏同样支持「默认 协议=域名」按协议下发。</div>
     </div>"""
 
 
@@ -3111,16 +3114,47 @@ class Handler(BaseHTTPRequestHandler):
                 relay_ips = _feed_file_lines(CONFIG.proxy_ips_file)   # 反代/中转 IP(上层反代), 网关 XFF 解析时跳过
                 allow_ips = _feed_file_lines(CONFIG.self_ips_file) + relay_ips
                 allow_uas = _feed_file_lines(CONFIG.ua_self_file)
-                # 动态下发配置(按面板: 普通/内鬼入口 + 封端UA): 只发有内容的, 与拦截开关无关(路由用)
+                # 动态下发配置(按面板: 普通/内鬼入口 + 封端UA): 只发有内容的, 与拦截开关无关(路由用)。
+                # 域名栏支持"默认 + 按协议覆盖"语法: "cdn.com hysteria2,tuic=direct.com" → {def, proto}
+                def _pe(s):
+                    s = (s or "").strip()
+                    if not s:
+                        return None
+                    d = {"def": "", "proto": {}}
+                    for tok in s.split():
+                        if "=" in tok:
+                            ps, _, dom = tok.partition("=")
+                            dom = dom.strip()
+                            if dom:
+                                for p in ps.split(","):
+                                    p = p.strip().lower()
+                                    if p:
+                                        d["proto"][p] = dom
+                        elif not d["def"]:
+                            d["def"] = tok.strip()
+                    return d if (d["def"] or d["proto"]) else None
                 dispatch = {}
                 for _pn, _c in store.get_dynamic_dispatch().items():
-                    _blocks = [{"ua": b.get("ua", ""), "domain": b.get("domain", "")}
-                               for b in (_c.get("blocks") or []) if b.get("on")]
+                    _blocks = []
+                    for b in (_c.get("blocks") or []):
+                        if not b.get("on"):
+                            continue
+                        _pd = _pe(b.get("domain", ""))
+                        if _pd:
+                            _blocks.append({"ua": b.get("ua", ""), "domain": _pd})
                     _e = {}
-                    if _c.get("normal") and _c.get("normal_on"): _e["normal"] = _c["normal"]
-                    if _c.get("insider") and _c.get("insider_on"): _e["insider"] = _c["insider"]
-                    if _blocks: _e["blocks"] = _blocks
-                    if _e: dispatch[_pn] = _e
+                    if _c.get("normal_on"):
+                        _n = _pe(_c.get("normal", ""))
+                        if _n:
+                            _e["normal"] = _n
+                    if _c.get("insider_on"):
+                        _i = _pe(_c.get("insider", ""))
+                        if _i:
+                            _e["insider"] = _i
+                    if _blocks:
+                        _e["blocks"] = _blocks
+                    if _e:
+                        dispatch[_pn] = _e
                 if store.get_kv("gateway_feed_enabled", "1") != "1":
                     # 开关关闭: 下发空拦截名单(网关随之清空 spyware 侧拦截, 等于暂停); 白名单/反代/动态下发仍发
                     self._send(json.dumps({"enabled": False, "interval": poll,

@@ -30,9 +30,24 @@ function splitLinesPreserve(text) {
   return String(text).split(/(\r\n|\n|\r)/);
 }
 
-function rewriteHostPortPrefix(line, prefix, decoyHost) {
+// 协议名归一(改写目标按协议挑域名时用)
+function normProto(t) {
+  const p = String(t || '').toLowerCase();
+  if (p === 'shadowsocks') return 'ss';
+  if (p === 'hy2') return 'hysteria2';
+  return p;
+}
+// resolve 可以是: 字符串(所有协议同一域名) 或 函数(proto)=>域名。返回空串=该节点不改写。
+function hostFor(resolve, proto) {
+  const h = typeof resolve === 'function' ? resolve(normProto(proto)) : resolve;
+  return h || '';
+}
+
+function rewriteHostPortPrefix(line, prefix, resolve) {
   const start = `${prefix}=`;
   if (!line.startsWith(start)) return line;
+  const decoyHost = hostFor(resolve, prefix);
+  if (!decoyHost) return line;
   const rest = line.slice(start.length);
   const comma = rest.indexOf(',');
   const endpoint = comma === -1 ? rest : rest.slice(0, comma);
@@ -42,9 +57,11 @@ function rewriteHostPortPrefix(line, prefix, decoyHost) {
   return `${start}${decoyHost}${endpoint.slice(idx)}${suffix}`;
 }
 
-function rewriteHostInUrl(raw, decoyHost) {
+function rewriteHostInUrl(raw, resolve) {
   const match = String(raw).match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//);
   if (!match || !URI_SCHEMES.has(match[1].toLowerCase())) return raw;
+  const decoyHost = hostFor(resolve, match[1]);
+  if (!decoyHost) return raw;
 
   if (match[1].toLowerCase() === 'vmess') {
     return rewriteVmessUri(raw, decoyHost);
@@ -75,58 +92,68 @@ function rewriteVmessUri(raw, decoyHost) {
   return raw;
 }
 
-function rewriteLine(line, decoyHost) {
+function rewriteLine(line, resolve) {
   for (const prefix of QX_PREFIXES) {
-    const next = rewriteHostPortPrefix(line, prefix, decoyHost);
+    const next = rewriteHostPortPrefix(line, prefix, resolve);
     if (next !== line) return next;
   }
-  return rewriteHostInUrl(line, decoyHost);
+  return rewriteHostInUrl(line, resolve);
 }
 
-function rewriteTextSubscription(text, decoyHost) {
+function rewriteTextSubscription(text, resolve) {
   return splitLinesPreserve(text)
-    .map((part) => (/^\r?\n$|^\r$/.test(part) ? part : rewriteLine(part, decoyHost)))
+    .map((part) => (/^\r?\n$|^\r$/.test(part) ? part : rewriteLine(part, resolve)))
     .join('');
 }
 
-function rewriteClashYaml(text, decoyHost) {
+function rewriteClashYaml(text, resolve) {
   const doc = yaml.load(text);
   if (!doc || typeof doc !== 'object') return text;
   if (Array.isArray(doc.proxies)) {
     for (const proxy of doc.proxies) {
       if (proxy && typeof proxy === 'object' && CLASH_TYPES.has(String(proxy.type || '').toLowerCase()) && proxy.server) {
-        proxy.server = decoyHost;
+        const h = hostFor(resolve, proxy.type);
+        if (h) proxy.server = h;
       }
     }
   }
   return yaml.dump(doc, { indent: 2, lineWidth: -1, quotingType: '"' });
 }
 
-function rewriteSingboxJson(text, decoyHost) {
+function rewriteSingboxJson(text, resolve) {
   const doc = JSON.parse(text);
   if (doc && Array.isArray(doc.outbounds)) {
     for (const outbound of doc.outbounds) {
       if (outbound && typeof outbound === 'object' && SINGBOX_TYPES.has(String(outbound.type || '').toLowerCase()) && outbound.server) {
-        outbound.server = decoyHost;
+        const h = hostFor(resolve, outbound.type);
+        if (h) outbound.server = h;
       }
     }
   }
   return JSON.stringify(doc, null, 2);
 }
 
-export function rewriteSubscriptionBody(body, clientType, decoyHost) {
-  if (!decoyHost) return body;
+// resolve: 字符串(所有协议同一域名) 或 函数(proto)=>域名(空=该节点不改写)。
+export function rewriteSubscriptionBody(body, clientType, resolve) {
+  if (!resolve) return body;
   const text = Buffer.isBuffer(body) ? body.toString('utf8') : String(body);
 
   if (clientType === 'clash') {
-    return Buffer.from(rewriteClashYaml(text, decoyHost), 'utf8');
+    return Buffer.from(rewriteClashYaml(text, resolve), 'utf8');
   }
   if (clientType === 'singbox') {
-    return Buffer.from(rewriteSingboxJson(text, decoyHost), 'utf8');
+    return Buffer.from(rewriteSingboxJson(text, resolve), 'utf8');
   }
   if (['base64', 'shadowrocket', 'quantumultx'].includes(clientType)) {
     const decoded = b64Decode(text);
-    return Buffer.from(b64Encode(rewriteTextSubscription(decoded, decoyHost)), 'utf8');
+    return Buffer.from(b64Encode(rewriteTextSubscription(decoded, resolve)), 'utf8');
   }
-  return Buffer.from(rewriteTextSubscription(text, decoyHost), 'utf8');
+  return Buffer.from(rewriteTextSubscription(text, resolve), 'utf8');
+}
+
+// 由入口配置 {def, proto:{...}} 生成一个 resolver(协议)=>域名; fallback 为默认兜底域名。
+export function makeResolver(entry, fallback) {
+  const def = (entry && entry.def) || fallback || '';
+  const proto = (entry && entry.proto) || {};
+  return (p) => proto[normProto(p)] || def || '';
 }
