@@ -2299,11 +2299,16 @@ def render_dynamic(store, msg="", err="", sel="*") -> str:
       <form method="post" action="/dynamic/entry-save" style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
         <input type="hidden" name="panel" value="{esc(sel)}">
         <div><div class="dim small">普通入口域名(无法判定是否内鬼的用户; 留空=下发真订阅不改写)</div>
-          <input name="normal" value="{esc(dd.get('normal',''))}" placeholder="如 normal.example.com" style="min-width:260px"></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <label class="switch"><input type="checkbox" name="normal_on" {'checked' if dd.get('normal_on') else ''}><span class="track"></span></label>
+            <input name="normal" value="{esc(dd.get('normal',''))}" placeholder="如 normal.example.com" style="min-width:240px"></div></div>
         <div><div class="dim small">内鬼入口域名(诱饵; 留空=回退网关 config 的 decoy_host)</div>
-          <input name="insider" value="{esc(dd.get('insider',''))}" placeholder="如 trap.example.com" style="min-width:260px"></div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <label class="switch"><input type="checkbox" name="insider_on" {'checked' if dd.get('insider_on') else ''}><span class="track"></span></label>
+            <input name="insider" value="{esc(dd.get('insider',''))}" placeholder="如 trap.example.com" style="min-width:240px"></div></div>
         <button class="btn">保存</button>
       </form>
+      <div class="dim small" style="margin-top:8px">开关关闭时该入口不下发(相当于停用但保留域名)。改完点「保存」生效。</div>
     </div>
 
     <div class="card">
@@ -3112,8 +3117,8 @@ class Handler(BaseHTTPRequestHandler):
                     _blocks = [{"ua": b.get("ua", ""), "domain": b.get("domain", "")}
                                for b in (_c.get("blocks") or []) if b.get("on")]
                     _e = {}
-                    if _c.get("normal"): _e["normal"] = _c["normal"]
-                    if _c.get("insider"): _e["insider"] = _c["insider"]
+                    if _c.get("normal") and _c.get("normal_on"): _e["normal"] = _c["normal"]
+                    if _c.get("insider") and _c.get("insider_on"): _e["insider"] = _c["insider"]
                     if _blocks: _e["blocks"] = _blocks
                     if _e: dispatch[_pn] = _e
                 if store.get_kv("gateway_feed_enabled", "1") != "1":
@@ -4008,6 +4013,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/dynamic/entry-save":
                     entry["normal"] = (formq.get("normal", [""])[0] or "").strip()
                     entry["insider"] = (formq.get("insider", [""])[0] or "").strip()
+                    entry["normal_on"] = bool(formq.get("normal_on"))   # 复选框未勾选则不在表单里
+                    entry["insider_on"] = bool(formq.get("insider_on"))
                     store.save_panel_dispatch(panel, entry)
                     self._to(back + "&msg=" + quote("入口已保存")); return
                 if path == "/dynamic/block-add":

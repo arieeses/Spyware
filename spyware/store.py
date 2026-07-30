@@ -1085,17 +1085,20 @@ class Store:
                 blocks.append({"id": b.get("id") or "", "ua": ua, "domain": dom,
                                "on": bool(b.get("on"))})
             entry = {"normal": (c.get("normal") or "").strip(),
-                     "insider": (c.get("insider") or "").strip(), "blocks": blocks}
+                     "normal_on": bool(c.get("normal_on")),
+                     "insider": (c.get("insider") or "").strip(),
+                     "insider_on": bool(c.get("insider_on")), "blocks": blocks}
             if entry["normal"] or entry["insider"] or blocks:
                 clean[str(panel)] = entry
         self.set_kv("dynamic_dispatch", _json.dumps(clean, ensure_ascii=False))
 
     def panel_dispatch(self, panel):
-        """取某面板的动态下发配置(不存在返回空模板)。"""
+        """取某面板的动态下发配置(不存在返回空模板)。normal_on/insider_on 缺省视为开(兼容旧数据)。"""
         d = self.get_dynamic_dispatch().get(str(panel))
         if not isinstance(d, dict):
-            return {"normal": "", "insider": "", "blocks": []}
+            return {"normal": "", "normal_on": True, "insider": "", "insider_on": True, "blocks": []}
         d.setdefault("normal", ""); d.setdefault("insider", ""); d.setdefault("blocks", [])
+        d.setdefault("normal_on", True); d.setdefault("insider_on", True)
         return d
 
     def save_panel_dispatch(self, panel, entry) -> None:
